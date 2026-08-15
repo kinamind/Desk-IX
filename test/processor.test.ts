@@ -128,4 +128,44 @@ describe("intent to business operation", () => {
     expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T06:45:00.000Z");
     expect(sentText).toContain("提前15 分钟提醒");
   });
+
+  it("shows a deferred action time separately from a distant deadline", async () => {
+    const now = new Date("2026-08-15T15:50:00.000Z");
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:processor-deferred-reminder",
+      messageId: "103",
+      userId: "42",
+      text: "这两天看一下研究数据，不能拖了",
+      timestamp: now.toISOString(),
+      eventType: "message",
+      replyToMessageId: "103",
+    };
+    const workflow = new FakeWorkflow();
+    const processorEnv: Env = { ...env, REMINDER_WORKFLOW: workflow };
+    let sentText = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      const body = JSON.parse(init.body) as { text?: unknown };
+      sentText = typeof body.text === "string" ? body.text : "";
+      return Response.json({ ok: true, result: { message_id: 204 } });
+    };
+    const provider = providerFor({
+      intent: "create_item",
+      type: "task",
+      title: "查看研究数据并回答问题",
+      content: incoming.text,
+      due_at: "2026-08-17T15:59:59.000Z",
+      reminder_at: "2026-08-16T02:00:00.000Z",
+      reminder_mode: "deferred_action",
+      original_time_expression: "这两天，不能拖了",
+      confidence: 0.95,
+    });
+
+    await processIncoming(processorEnv, incoming, fetcher, now, provider);
+
+    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-16T02:00:00.000Z");
+    expect(sentText).toContain("提醒：8/16 10:00 · 截止：8/17 23:59");
+    expect(sentText).not.toContain("提前");
+  });
 });

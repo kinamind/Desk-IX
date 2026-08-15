@@ -6,7 +6,7 @@ Composa 是单 Worker、单业务处理器、单 D1 数据源的 IM-first Agent�
 
 关键边界：**LLM understands; code executes.**
 
-- LLM 是普通自然语言的第一理解层，负责意图、时间语义、查询过滤、合理提醒提前量、网页摘要、Daily Plan 排序和明确要求的分析。
+- LLM 是普通自然语言的第一理解层，负责意图、时间语义、查询过滤、合理的未来行动提醒、网页摘要、Daily Plan 排序和明确要求的分析。
 - 代码只校验模型结构化输出，并处理权限、CRUD、时间合法性、回调、去重、提醒、重试与调度。
 - `/help` 与平台 callback 不需要模型。其他自然语言在 AI 未配置、超过预算或暂时失败时会明确提示且不擅自保存，不会静默伪装成已经理解，也不会选择另一个付费模型。
 
@@ -45,7 +45,9 @@ Schema 保持少表、JSON enrichment、必要索引；D1 是 source of truth，
   → reminder = triggered
 ```
 
-Workflow 的发送与最终 D1 状态是两个 durable step。发送 step 成功后其 receipt 会被缓存；即使后续状态写入重试，也不会再次发送。创建 Workflow 的瞬时错误会把 reminder 标记 failed，下一次相同幂等请求可安全 reclaim。
+Workflow 的发送与最终 D1 状态是两个 durable step。发送 step 成功后其 receipt 会被缓存；即使后续状态写入重试，也不会再次发送。创建或运行 Workflow 的错误会把 reminder 标记 failed。若实例启动时提醒时间刚刚过去，Workflow 会直接进入幂等发送步骤，不再用过去时间调用 sleep。
+
+用户发送可行动事项时，默认语义是“现在暂存、稍后再做”。模型会区分 deferred action、pre-event、deadline 与明确的 immediate request；deferred action 至少晚于当前时间 30 分钟，深夜优先选择次日白天。代码拒绝近乎立即或晚于截止时间的结果，并让模型重新选择一次。
 
 ## Daily Plan
 

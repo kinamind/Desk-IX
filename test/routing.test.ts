@@ -14,6 +14,17 @@ function jsonProvider(payload: Record<string, unknown>, calls: string[]): AIProv
   };
 }
 
+function sequenceProvider(payloads: Record<string, unknown>[], calls: string[]): AIProvider {
+  return {
+    generate: (request) => {
+      calls.push(request.messages.at(-1)?.content ?? "");
+      const payload = payloads.shift();
+      if (!payload) throw new Error("No queued model response");
+      return Promise.resolve({ text: JSON.stringify(payload), model: "test-model", inputTokens: 10, outputTokens: 5 });
+    },
+  };
+}
+
 describe("AI-first routing", () => {
   it("lets the model understand Chinese time and choose a transparent lead time", async () => {
     const calls: string[] = [];
@@ -64,6 +75,48 @@ describe("AI-first routing", () => {
         keyword: "研究",
       },
     });
+  });
+
+  it("asks the model to replace a near-immediate deferred reminder with a useful future time", async () => {
+    const calls: string[] = [];
+    const base = {
+      intent: "create_item",
+      type: "task",
+      title: "查看研究数据并回答问题",
+      content: "这两天看一下研究数据，不能拖了",
+      due_at: "2026-08-17T15:59:59.000Z",
+      reminder_mode: "deferred_action",
+      confidence: 0.94,
+    };
+    const intent = await routeMessage("这两天看一下研究数据，不能拖了", sequenceProvider([
+      { ...base, reminder_at: "2026-08-15T04:30:05.000Z" },
+      { ...base, reminder_at: "2026-08-16T02:00:00.000Z" },
+    ], calls), now);
+
+    expect(calls).toHaveLength(2);
+    expect(intent).toMatchObject({
+      reminderAt: "2026-08-16T02:00:00.000Z",
+      reminderMode: "deferred_action",
+    });
+    expect(calls[1]).toContain("previous_result");
+  });
+
+  it("asks the model to add a missing reminder for an actionable task", async () => {
+    const calls: string[] = [];
+    const base = {
+      intent: "create_item",
+      type: "task",
+      title: "回复研究问题",
+      content: "回复研究问题",
+      confidence: 0.9,
+    };
+    const intent = await routeMessage("回复研究问题", sequenceProvider([
+      base,
+      { ...base, reminder_at: "2026-08-15T06:00:00.000Z", reminder_mode: "deferred_action" },
+    ], calls), now);
+
+    expect(calls).toHaveLength(2);
+    expect(intent).toMatchObject({ reminderAt: "2026-08-15T06:00:00.000Z", reminderMode: "deferred_action" });
   });
 
   it("keeps only the explicit help command outside the model", async () => {
