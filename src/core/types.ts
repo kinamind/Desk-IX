@@ -4,6 +4,9 @@ export type ItemType = (typeof ITEM_TYPES)[number];
 export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+export const REMINDER_MODES = ["deferred_action", "pre_event", "at_deadline", "explicit_now", "none"] as const;
+export type ReminderMode = (typeof REMINDER_MODES)[number];
+
 export type ChannelName = "telegram" | "qq";
 export type MessageIntent = "create_item" | "query" | "analyze" | "help" | "clarify" | "unavailable";
 
@@ -76,6 +79,7 @@ export interface ParsedIntent {
   estimatedDuration?: number | null;
   dueAt?: string | null;
   reminderAt?: string | null;
+  reminderMode?: ReminderMode | null;
   startAfter?: string | null;
   originalTimeExpression?: string | null;
   query?: ItemSearchFilters;

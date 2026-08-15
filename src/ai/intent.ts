@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { ITEM_TYPES, PRIORITIES, type ItemSearchFilters, type ParsedIntent } from "../core/types";
+import { ITEM_TYPES, PRIORITIES, REMINDER_MODES, type ItemSearchFilters, type ParsedIntent, type ReminderMode } from "../core/types";
 import { log } from "../observability/log";
 import { parseAIJson } from "./openai-compatible";
 import type { AIProvider } from "./provider";
-import { INTENT_PROMPT, RESCHEDULE_PROMPT } from "./prompts";
+import { INTENT_PROMPT, REMINDER_REPAIR_PROMPT, RESCHEDULE_PROMPT } from "./prompts";
 
 const isoDate = z.string().datetime({ offset: true });
 
@@ -29,6 +29,7 @@ const aiIntentSchema = z.object({
   estimated_duration: z.number().int().positive().max(100_800).optional().nullable(),
   due_at: isoDate.optional().nullable(),
   reminder_at: isoDate.optional().nullable(),
+  reminder_mode: z.enum(REMINDER_MODES).optional().nullable(),
   start_after: isoDate.optional().nullable(),
   original_time_expression: z.string().max(200).optional().nullable(),
   query: aiQuerySchema,
@@ -39,6 +40,7 @@ const aiIntentSchema = z.object({
 const scheduleSchema = z.object({
   due_at: isoDate.optional().nullable(),
   reminder_at: isoDate.optional().nullable(),
+  reminder_mode: z.enum(REMINDER_MODES).optional().nullable(),
   original_time_expression: z.string().max(200).optional().nullable(),
   clarification_question: z.string().max(300).optional().nullable(),
 });
@@ -46,6 +48,7 @@ const scheduleSchema = z.object({
 export interface ScheduleResolution {
   dueAt: string | null;
   reminderAt: string | null;
+  reminderMode: ReminderMode | null;
   originalTimeExpression: string | null;
   question: string | null;
 }
@@ -74,14 +77,37 @@ function normalizeQuery(query: z.infer<typeof aiQuerySchema>): ItemSearchFilters
   };
 }
 
-function normalizeReminder(reminderAt: string | null | undefined, dueAt: string | null | undefined, now: Date): string | null {
-  if (!reminderAt) return null;
+const MIN_DEFERRED_DELAY_MS = 30 * 60_000;
+const MIN_WORKFLOW_DELAY_MS = 2 * 60_000;
+
+function normalizeReminder(
+  reminderAt: string | null | undefined,
+  dueAt: string | null | undefined,
+  now: Date,
+  mode: ReminderMode | null | undefined,
+): { value: string | null; rejected: boolean } {
+  if (!reminderAt || mode === "none") return { value: null, rejected: false };
+  if (mode === "explicit_now") return { value: null, rejected: false };
   const reminder = new Date(reminderAt);
-  if (reminder.getTime() > now.getTime()) return reminder.toISOString();
-  if (dueAt && new Date(dueAt).getTime() > now.getTime()) {
-    return new Date(now.getTime() + 5_000).toISOString();
+  const minimumDelay = mode === "pre_event" || mode === "at_deadline" ? MIN_WORKFLOW_DELAY_MS : MIN_DEFERRED_DELAY_MS;
+  const dueTime = dueAt ? new Date(dueAt).getTime() : null;
+  if (reminder.getTime() < now.getTime() + minimumDelay || (dueTime !== null && reminder.getTime() > dueTime)) {
+    return { value: null, rejected: true };
   }
-  return null;
+  return { value: reminder.toISOString(), rejected: false };
+}
+
+function needsReminderRepair(
+  parsed: z.infer<typeof aiIntentSchema>,
+  normalized: { value: string | null; rejected: boolean },
+): boolean {
+  if (normalized.rejected) return true;
+  if (parsed.intent !== "create_item" || parsed.reminder_mode === "none" || parsed.reminder_mode === "explicit_now") return false;
+  const actionableType = parsed.type === "task" || parsed.type === "project";
+  const requestedReminderMode = parsed.reminder_mode === "deferred_action"
+    || parsed.reminder_mode === "pre_event"
+    || parsed.reminder_mode === "at_deadline";
+  return normalized.value === null && (actionableType || requestedReminderMode);
 }
 
 export async function routeMessage(
@@ -97,7 +123,7 @@ export async function routeMessage(
   if (!provider) return unavailableIntent();
 
   try {
-    const response = await provider.generate({
+    let response = await provider.generate({
       purpose: "intent",
       expectJson: true,
       messages: [
@@ -105,7 +131,23 @@ export async function routeMessage(
         { role: "user", content: trimmed.slice(0, MAX_MODEL_INPUT_CHARS) },
       ],
     });
-    const parsed = aiIntentSchema.parse(parseAIJson(response.text));
+    let parsed = aiIntentSchema.parse(parseAIJson(response.text));
+    let dueAt = parsed.due_at ? new Date(parsed.due_at).toISOString() : null;
+    let normalizedReminder = normalizeReminder(parsed.reminder_at, dueAt, now, parsed.reminder_mode);
+    if (needsReminderRepair(parsed, normalizedReminder)) {
+      response = await provider.generate({
+        purpose: "intent",
+        expectJson: true,
+        messages: [
+          { role: "system", content: `${INTENT_PROMPT}\n${REMINDER_REPAIR_PROMPT}\n当前时间：${now.toISOString()}\n用户时区：${timezone}` },
+          { role: "user", content: JSON.stringify({ message: trimmed.slice(0, MAX_MODEL_INPUT_CHARS), previous_result: parsed }) },
+        ],
+      });
+      parsed = aiIntentSchema.parse(parseAIJson(response.text));
+      dueAt = parsed.due_at ? new Date(parsed.due_at).toISOString() : null;
+      normalizedReminder = normalizeReminder(parsed.reminder_at, dueAt, now, parsed.reminder_mode);
+    }
+    if (needsReminderRepair(parsed, normalizedReminder)) throw new Error("Model returned an unusable reminder twice");
     if (parsed.intent === "clarify") {
       return {
         intent: "clarify",
@@ -115,8 +157,7 @@ export async function routeMessage(
       };
     }
 
-    const dueAt = parsed.due_at ? new Date(parsed.due_at).toISOString() : null;
-    const reminderAt = normalizeReminder(parsed.reminder_at, dueAt, now);
+    const reminderAt = normalizedReminder.value;
     return {
       intent: parsed.intent,
       ...(parsed.type ? { type: parsed.type } : {}),
@@ -129,6 +170,7 @@ export async function routeMessage(
       estimatedDuration: parsed.estimated_duration ?? null,
       dueAt,
       reminderAt,
+      reminderMode: parsed.reminder_mode ?? null,
       startAfter: parsed.start_after ? new Date(parsed.start_after).toISOString() : null,
       originalTimeExpression: parsed.original_time_expression ?? null,
       ...(parsed.intent === "query" ? { query: normalizeQuery(parsed.query) } : {}),
@@ -137,7 +179,7 @@ export async function routeMessage(
       aiEnrichment: {
         provider: "openai-compatible",
         model: response.model,
-        generated_fields: ["intent", "title", "tags", "dates", "query"],
+        generated_fields: ["intent", "title", "tags", "dates", "reminder_mode", "query"],
       },
     };
   } catch (error) {
@@ -154,7 +196,7 @@ export async function resolveScheduleChange(
   timezone = "Asia/Singapore",
 ): Promise<ScheduleResolution> {
   if (!provider) {
-    return { dueAt: null, reminderAt: null, originalTimeExpression: null, question: "模型暂时不可用，原时间没有修改。" };
+    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, question: "模型暂时不可用，原时间没有修改。" };
   }
   try {
     const response = await provider.generate({
@@ -167,16 +209,18 @@ export async function resolveScheduleChange(
     });
     const parsed = scheduleSchema.parse(parseAIJson(response.text));
     const dueAt = parsed.due_at ? new Date(parsed.due_at).toISOString() : null;
-    const reminderAt = normalizeReminder(parsed.reminder_at ?? parsed.due_at, dueAt, now);
+    const normalizedReminder = normalizeReminder(parsed.reminder_at ?? parsed.due_at, dueAt, now, parsed.reminder_mode);
+    const reminderAt = normalizedReminder.value;
     const question = parsed.clarification_question ?? (!dueAt && !reminderAt ? "我还不能确定新时间，能再说具体一点吗？" : null);
     return {
       dueAt,
       reminderAt,
+      reminderMode: parsed.reminder_mode ?? null,
       originalTimeExpression: parsed.original_time_expression ?? text.slice(0, 200),
       question,
     };
   } catch (error) {
     log("warn", "ai_reschedule_failed", { error: error instanceof Error ? error.message : String(error) });
-    return { dueAt: null, reminderAt: null, originalTimeExpression: null, question: "模型这次没有成功理解，原时间没有修改。" };
+    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, question: "模型这次没有成功理解，原时间没有修改。" };
   }
 }

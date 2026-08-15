@@ -17,7 +17,8 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 - Resource、Idea、Task、Project/Deadline、Query 五类核心意图
 - D1 作为唯一 source of truth，保留用户原文与 AI enrichment 的边界
 - AI-first 自然语言理解：中文数字、口语时间、事项时间与提醒时间由模型统一解释
-- 对可逆小歧义自主选择合理提醒提前量，并在确认消息中明确展示
+- 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
+- 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
 - Cloudflare Workflows 一次性提醒与少量 deadline milestones
 - Cron 驱动、D1 事实驱动的简洁 Daily Plan
 - `Done`、`Later`、`Reschedule`、`Details` 交互按钮
@@ -124,7 +125,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖 AI-first 结构化意图、模型自主提醒提前量、CRUD、重复 webhook、Workflow 调度、callback、时区、deadline milestones、Telegram/QQ 授权与 QQ 官方 Ed25519 challenge 向量、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖 AI-first 结构化意图、延后提醒策略、模型时间纠偏、CRUD、重复 webhook、Workflow 调度、callback、时区、deadline milestones、Telegram/QQ 授权与 QQ 官方 Ed25519 challenge 向量、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
 
 ## 项目结构
 

@@ -81,7 +81,7 @@ export async function processIncoming(
             kind: "rescheduled",
             target: { channel: incoming.channel, userId: incoming.userId },
           }, now);
-          output = { text: formatScheduleConfirmation(item.title, dueAt, schedule.reminderAt, config.timezone, "已改好") };
+          output = { text: formatScheduleConfirmation(item.title, dueAt, schedule.reminderAt, config.timezone, "已改好", schedule.reminderMode) };
           itemId = item.id;
         }
       } else {
@@ -232,6 +232,7 @@ async function executeIntent(
     await scheduleReminder(env, {
       itemId: item.id,
       remindAt: intent.reminderAt,
+      kind: intent.reminderMode ?? "reminder",
       target: { channel: incoming.channel, userId: incoming.userId },
     }, now);
   }
@@ -246,11 +247,15 @@ async function executeIntent(
     }
   }
 
-  return { output: { text: confirmation(item, intent.reminderAt, urlFetchFailed, config.timezone) }, itemId: item.id };
+  return { output: { text: confirmation(item, intent.reminderAt, intent.reminderMode, urlFetchFailed, config.timezone) }, itemId: item.id };
 }
 
-function confirmation(item: Item, reminderAt: string | null | undefined, urlFetchFailed: boolean, timezone: string): string {
-  if (reminderAt) return formatScheduleConfirmation(item.title, item.dueAt, reminderAt, timezone, "已安排");
+function confirmation(item: Item, reminderAt: string | null | undefined, reminderMode: ParsedIntent["reminderMode"], urlFetchFailed: boolean, timezone: string): string {
+  if (reminderMode === "explicit_now") {
+    const due = item.dueAt ? `\n截止：${formatConfirmation(item.dueAt, timezone)}` : "";
+    return `🔔 ${item.title}${due}`;
+  }
+  if (reminderAt) return formatScheduleConfirmation(item.title, item.dueAt, reminderAt, timezone, "已安排", reminderMode);
   if (item.type === "resource") return urlFetchFailed ? "✓ 已保存链接（网页暂时无法解析）。" : `✓ 已保存：${item.title}`;
   if (item.type === "idea") return `✓ 已记录 Idea：${item.title}`;
   if (item.type === "project" && item.dueAt) return `✓ 已记录项目，截止 ${formatConfirmation(item.dueAt, timezone)}。`;
@@ -267,11 +272,15 @@ function formatScheduleConfirmation(
   reminderAt: string,
   timezone: string,
   verb: string,
+  reminderMode?: ParsedIntent["reminderMode"],
 ): string {
   const reminder = formatConfirmation(reminderAt, timezone);
   if (!dueAt) return `⏰ ${verb}：${reminder}\n${title}`;
   const due = formatConfirmation(dueAt, timezone);
   const leadMinutes = Math.round((new Date(dueAt).getTime() - new Date(reminderAt).getTime()) / 60_000);
+  if (reminderMode === "deferred_action" || leadMinutes > 24 * 60) {
+    return `⏰ ${verb}：${title}\n提醒：${reminder} · 截止：${due}`;
+  }
   if (leadMinutes > 0) {
     return `⏰ ${verb}：${title}\n事项：${due} · 提前${formatDuration(leadMinutes)}提醒（${reminder}）`;
   }

@@ -96,7 +96,7 @@ npm run smoke
 
 1. 保存公开 URL，确认回复使用网页标题，并用关键词查询。
 2. 保存 Research Idea，确认没有自动生成研究方案。
-3. 用口语建一个几分钟后的临时提醒，确认回复同时显示事项时间、模型选择的提前量和实际提醒时间，并验证主动推送与 `Done/Later/Reschedule`。
+3. 用口语建一个稍后处理的任务，确认模型没有选择当前时间，回复分别显示提醒时间与截止时间，并验证主动推送与 `Done/Later/Reschedule`。
 4. 建 deadline project，检查 `reminders` 只有至多三条 future milestones。
 5. 用 `/api/daily-plan` 预览真实 D1 计划。
 6. 用非 allowlist 账号验证被拒绝。
