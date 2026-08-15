@@ -9,5 +9,5 @@ export function getChannelAdapter(env: Env, channel: ChannelName, fetcher: typeo
   if (channel === "telegram") {
     return new TelegramAdapter(config, env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_WEBHOOK_SECRET, fetcher);
   }
-  return new QQAdapter(config, env.QQ_BOT_SECRET, env.QQ_CLIENT_SECRET, fetcher);
+  return new QQAdapter(config, env.QQ_APP_SECRET, fetcher);
 }

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "types": "wrangler types",
+    "types": "wrangler types --env-file .dev.vars.example",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test scripts",
     "test": "vitest run",

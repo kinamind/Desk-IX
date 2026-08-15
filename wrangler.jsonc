@@ -4,23 +4,25 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "keep_vars": true,
+  "routes": [
+    {
+      "pattern": "composa.kinamind.org",
+      "custom_domain": true
+    }
+  ],
   "vars": {
     "APP_NAME": "Composa",
     "APP_LOCALE": "zh-CN",
     "TIMEZONE": "Asia/Singapore",
     "DAILY_PLAN_TIME": "08:00",
-    "DAILY_PLAN_TARGETS": "",
-    "AI_BASE_URL": "https://api.openai.com/v1",
-    "AI_MODEL": "gpt-4.1-mini",
     "AI_EMBEDDING_MODEL": "",
     "AI_MAX_TOKENS": "600",
     "AI_TIMEOUT_MS": "15000",
     "AI_DAILY_REQUEST_LIMIT": "100",
     "URL_FETCH_TIMEOUT_MS": "6000",
     "URL_MAX_BYTES": "524288",
-    "TELEGRAM_ALLOWED_USER_IDS": "",
-    "QQ_ALLOWED_USER_OPENIDS": "",
-    "QQ_APP_ID": "",
     "QQ_API_BASE_URL": "https://api.bot.qq.com"
   },
   "d1_databases": [

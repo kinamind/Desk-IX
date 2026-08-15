@@ -25,8 +25,7 @@
     "AI_API_KEY": "",
     "TELEGRAM_BOT_TOKEN": "test-telegram-token",
     "TELEGRAM_WEBHOOK_SECRET": "test-webhook-secret",
-    "QQ_BOT_SECRET": "naOC0ocQE3shWLAfffVLB1rhYPG7",
-    "QQ_CLIENT_SECRET": "test-client-secret",
+    "QQ_APP_SECRET": "naOC0ocQE3shWLAfffVLB1rhYPG7",
     "ADMIN_API_TOKEN": "test-admin-token"
   },
   "d1_databases": [

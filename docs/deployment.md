@@ -44,13 +44,15 @@ npx wrangler d1 execute composa --remote --command "SELECT name FROM sqlite_mast
 
 ## 3. 设置非敏感配置
 
-编辑 `wrangler.jsonc`：
+在 Cloudflare Dashboard 的 **Variables and secrets** 中设置实例专属值：
 
 - `TIMEZONE`、`DAILY_PLAN_TIME`
 - `TELEGRAM_ALLOWED_USER_IDS`
 - `QQ_APP_ID`、`QQ_ALLOWED_USER_OPENIDS`
 - `DAILY_PLAN_TARGETS`
 - AI endpoint/model/budget
+
+`wrangler.jsonc` 开启了 `keep_vars`，后续运行 `npm run deploy` 会保留这些面板值，不会用仓库中的空占位覆盖它们。
 
 首次不知道 QQ openid 时先保持 QQ allowlist 与 QQ Daily Plan target 为空，按 [QQ 接入指南](qq.md) 的一次性日志流程取得。
 
@@ -69,8 +71,7 @@ npx wrangler secret put ADMIN_API_TOKEN
 npx wrangler secret put AI_API_KEY
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
-npx wrangler secret put QQ_BOT_SECRET
-npx wrangler secret put QQ_CLIENT_SECRET
+npx wrangler secret put QQ_APP_SECRET
 ```
 
 `AI_API_KEY` 可以不设置，系统会在无 AI 模式稳定运行。不要配置任何你不希望使用的付费 fallback。
