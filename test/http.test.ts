@@ -10,7 +10,12 @@ describe("HTTP router", () => {
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
     const body = await response.json<Record<string, unknown>>();
-    expect(body).toMatchObject({ ok: true, service: "Composa", channels: { telegram: true, qq: true }, ai: false });
+    expect(body).toMatchObject({
+      ok: true,
+      service: "Composa",
+      channels: { telegram: true, qq: true },
+      ai: { configured: false, verified: false },
+    });
     expect(JSON.stringify(body)).not.toContain("test-admin-token");
   });
 

@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { getConfig } from "../config";
+import { getConfig, isAIEnabled } from "../config";
 import { getChannelAdapter } from "../channels/registry";
 import { processIncoming } from "../core/processor";
 import { buildDailyPlan, runDailyPlan } from "../core/daily-plan";
+import { localDate } from "../core/time";
+import { getAIRequests } from "../db/ai-usage";
 import { completeItem, getItem, searchItems } from "../db/items";
 import { log } from "../observability/log";
 import { constantTimeEqual } from "../security/crypto";
@@ -15,6 +17,10 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
     if (request.method === "GET" && url.pathname === "/health") {
       const result = await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
       const config = getConfig(env);
+      const aiConfigured = isAIEnabled(env);
+      const successfulAIRequests = aiConfigured
+        ? await getAIRequests(env.DB, localDate(new Date(), config.timezone), "openai-compatible")
+        : 0;
       return Response.json({
         ok: result?.ok === 1,
         service: "Composa",
@@ -24,7 +30,7 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
           telegram: Boolean(env.TELEGRAM_BOT_TOKEN && config.telegramAllowedUserIds.size),
           qq: Boolean(config.qqAppId && env.QQ_APP_SECRET && config.qqAllowedUserOpenIds.size),
         },
-        ai: Boolean(env.AI_API_KEY),
+        ai: { configured: aiConfigured, verified: successfulAIRequests > 0 },
       });
     }
 

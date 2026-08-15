@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getConfig, isAIEnabled } from "../config";
-import { routeMessage } from "../ai/intent";
+import { resolveScheduleChange, routeMessage } from "../ai/intent";
 import { OpenAICompatibleProvider, parseAIJson } from "../ai/openai-compatible";
 import { SECRETARY_STYLE, URL_ENRICHMENT_PROMPT } from "../ai/prompts";
 import type { AIProvider } from "../ai/provider";
@@ -8,12 +8,11 @@ import { getChannelAdapter } from "../channels/registry";
 import { createItem, getItem, getItemBySource, mergeItemEnrichment, searchItems, updateItemSchedule } from "../db/items";
 import { failMessage, finishMessage, claimMessage } from "../db/messages";
 import { setPendingAction, takePendingAction } from "../db/pending-actions";
-import { extractPageMetadata } from "../url/extract";
-import { fetchPage } from "../url/fetch";
+import { cancelOpenReminders } from "../db/reminders";
+import { discoverUrls, readWebPage } from "../url/reader";
 import { handleCallback } from "./callbacks";
 import { generateDeadlineMilestones } from "./milestones";
 import { scheduleReminder } from "./reminder-service";
-import { parseNaturalTime } from "./time";
 import type { IncomingMessage, Item, OutgoingMessage, ParsedIntent } from "./types";
 import { log } from "../observability/log";
 
@@ -27,7 +26,13 @@ const urlEnrichmentSchema = z.object({
   potential_deadline: z.string().nullable().optional(),
 });
 
-export async function processIncoming(env: Env, incoming: IncomingMessage, fetcher: typeof fetch = fetch, now = new Date()): Promise<void> {
+export async function processIncoming(
+  env: Env,
+  incoming: IncomingMessage,
+  fetcher: typeof fetch = fetch,
+  now = new Date(),
+  providerOverride?: AIProvider | null,
+): Promise<void> {
   const claim = await claimMessage(env.DB, incoming, now);
   if (!claim.claimed) {
     log("info", "message_duplicate", { channel: incoming.channel, eventId: incoming.eventId, status: claim.status });
@@ -36,7 +41,9 @@ export async function processIncoming(env: Env, incoming: IncomingMessage, fetch
 
   const config = getConfig(env);
   const adapter = getChannelAdapter(env, incoming.channel, fetcher);
-  const provider = isAIEnabled(env) ? new OpenAICompatibleProvider(env.DB, config, env.AI_API_KEY, fetcher, () => now) : null;
+  const provider = providerOverride === undefined
+    ? isAIEnabled(env) ? new OpenAICompatibleProvider(env.DB, config, env.AI_API_KEY, fetcher, () => now) : null
+    : providerOverride;
 
   try {
     let output: OutgoingMessage;
@@ -52,27 +59,29 @@ export async function processIncoming(env: Env, incoming: IncomingMessage, fetch
     } else {
       const pending = await takePendingAction(env.DB, incoming.channel, incoming.userId, now);
       if (pending?.action === "reschedule") {
-        const parsed = parseNaturalTime(incoming.text, now, config.timezone);
-        if (!parsed) {
+        const item = await getItem(env.DB, pending.itemId);
+        if (!item) throw new Error("Pending reschedule item no longer exists");
+        const schedule = await resolveScheduleChange(incoming.text, { title: item.title, dueAt: item.dueAt }, provider, now, config.timezone);
+        if (schedule.question || !schedule.reminderAt) {
           await setPendingAction(env.DB, {
             channel: pending.channel,
             userId: pending.userId,
             action: pending.action,
             itemId: pending.itemId,
           }, now);
-          output = { text: "没识别到时间，请再发一次，例如“明天下午 3 点”。" };
+          output = { text: schedule.question ?? "我还不能确定新时间，能再说具体一点吗？" };
           itemId = pending.itemId;
         } else {
-          const item = await getItem(env.DB, pending.itemId);
-          if (!item) throw new Error("Pending reschedule item no longer exists");
-          await updateItemSchedule(env.DB, item.id, parsed.at, parsed.originalExpression, now);
+          const dueAt = schedule.dueAt ?? schedule.reminderAt;
+          await updateItemSchedule(env.DB, item.id, dueAt, schedule.originalTimeExpression ?? incoming.text.slice(0, 200), now);
+          await cancelOpenReminders(env.DB, item.id);
           await scheduleReminder(env, {
             itemId: item.id,
-            remindAt: parsed.at,
+            remindAt: schedule.reminderAt,
             kind: "rescheduled",
             target: { channel: incoming.channel, userId: incoming.userId },
           }, now);
-          output = { text: `⏰ 已改到 ${formatConfirmation(parsed.at, config.timezone)}：${item.title}` };
+          output = { text: formatScheduleConfirmation(item.title, dueAt, schedule.reminderAt, config.timezone, "已改好") };
           itemId = item.id;
         }
       } else {
@@ -105,6 +114,9 @@ async function executeIntent(
   now: Date,
 ): Promise<{ output: OutgoingMessage; itemId: string | null }> {
   const config = getConfig(env);
+  if (intent.intent === "clarify" || intent.intent === "unavailable") {
+    return { output: { text: intent.question ?? "我还不能确定你的意思，能再说具体一点吗？" }, itemId: null };
+  }
   if (intent.intent === "help") {
     return {
       output: { text: "直接发给我：链接、idea、待办、deadline 或提醒。也可以问“这周还有什么？”\n按钮可直接完成、延后或改期。" },
@@ -119,18 +131,40 @@ async function executeIntent(
 
   if (intent.intent === "analyze") {
     if (!provider) return { output: { text: "AI 还未配置；设置 AI_API_KEY 后可以展开分析。" }, itemId: null };
-    const response = await provider.generate({
-      purpose: "analysis",
-      maxTokens: Math.min(config.aiMaxTokens, 1200),
-      messages: [
-        { role: "system", content: `${SECRETARY_STYLE}\n用户这次明确要求分析，可以展开，但保持结构清楚。` },
-        { role: "user", content: incoming.text },
-      ],
-    });
-    return { output: { text: response.text.slice(0, 3500) }, itemId: null };
+    let webContext: Record<string, unknown> | null = null;
+    const url = discoverUrls(incoming.text, 1)[0];
+    if (url) {
+      try {
+        const reading = await readWebPage(url, config, fetcher);
+        webContext = {
+          url: reading.finalUrl,
+          title: reading.title,
+          description: reading.description,
+          source: reading.source,
+          text: reading.text.slice(0, 12_000),
+        };
+      } catch (error) {
+        log("warn", "web_reader_failed", { url, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    try {
+      const response = await provider.generate({
+        purpose: "analysis",
+        maxTokens: Math.min(config.aiMaxTokens, 1200),
+        messages: [
+          { role: "system", content: `${SECRETARY_STYLE}\n用户这次明确要求分析，可以展开，但保持结构清楚。若提供了网页正文，只根据真实正文分析。` },
+          { role: "user", content: JSON.stringify({ message: incoming.text, webpage: webContext }) },
+        ],
+      });
+      return { output: { text: response.text.slice(0, 3500) }, itemId: null };
+    } catch (error) {
+      log("warn", "ai_analysis_failed", { error: error instanceof Error ? error.message : String(error) });
+      return { output: { text: "模型这次没有成功完成分析，请稍后重试。" }, itemId: null };
+    }
   }
 
-  const type = intent.type ?? "note";
+  const discoveredUrl = intent.url ?? discoverUrls(incoming.text, 1)[0] ?? null;
+  const type = intent.type ?? (discoveredUrl ? "resource" : "note");
   let item = await getItemBySource(env.DB, incoming.channel, incoming.eventId);
   if (!item) {
     item = await createItem(env.DB, {
@@ -138,7 +172,7 @@ async function executeIntent(
       title: intent.title?.trim().slice(0, 100) || incoming.text.slice(0, 60),
       content: intent.content ?? incoming.text,
       rawMessage: incoming.text,
-      url: intent.url ?? null,
+      url: discoveredUrl,
       tags: intent.tags ?? [],
       ...(intent.status ? { status: intent.status } : {}),
       ...(intent.priority ? { priority: intent.priority } : {}),
@@ -154,12 +188,11 @@ async function executeIntent(
   }
 
   let urlFetchFailed = false;
-  if (type === "resource" && item.url) {
+  if (item.url) {
     try {
-      const page = await fetchPage(item.url, { timeoutMs: config.urlFetchTimeoutMs, maxBytes: config.urlMaxBytes }, fetcher);
-      const metadata = extractPageMetadata(page.body, page.url);
+      const reading = await readWebPage(item.url, config, fetcher);
       const enrichment: Record<string, unknown> = {};
-      if (provider && metadata.text) {
+      if (provider && reading.text) {
         try {
           const response = await provider.generate({
             purpose: "url_enrichment",
@@ -167,7 +200,7 @@ async function executeIntent(
             maxTokens: 400,
             messages: [
               { role: "system", content: URL_ENRICHMENT_PROMPT },
-              { role: "user", content: JSON.stringify({ url: page.url, title: metadata.title, description: metadata.description, text: metadata.text.slice(0, 12_000) }) },
+              { role: "user", content: JSON.stringify({ url: reading.finalUrl, title: reading.title, description: reading.description, text: reading.text.slice(0, 12_000) }) },
             ],
           });
           Object.assign(enrichment, urlEnrichmentSchema.parse(parseAIJson(response.text)), { provider: "openai-compatible", model: response.model });
@@ -176,13 +209,14 @@ async function executeIntent(
         }
       }
       await mergeItemEnrichment(env.DB, item.id, enrichment, {
-        fetched_url: page.url,
-        canonical_url: metadata.canonicalUrl,
-        source: metadata.source,
-        description: metadata.description,
-        truncated: page.truncated,
+        fetched_url: reading.finalUrl,
+        canonical_url: reading.canonicalUrl,
+        source: reading.source,
+        description: reading.description,
+        reader: "basic-html",
+        truncated: reading.truncated,
         fetch_status: "ok",
-      }, metadata.title ?? undefined, now);
+      }, reading.title ?? undefined, now);
       item = await getItem(env.DB, item.id) ?? item;
     } catch (error) {
       urlFetchFailed = true;
@@ -216,12 +250,38 @@ async function executeIntent(
 }
 
 function confirmation(item: Item, reminderAt: string | null | undefined, urlFetchFailed: boolean, timezone: string): string {
-  if (reminderAt) return `⏰ 已设置：${formatConfirmation(reminderAt, timezone)}\n${item.title}`;
+  if (reminderAt) return formatScheduleConfirmation(item.title, item.dueAt, reminderAt, timezone, "已安排");
   if (item.type === "resource") return urlFetchFailed ? "✓ 已保存链接（网页暂时无法解析）。" : `✓ 已保存：${item.title}`;
   if (item.type === "idea") return `✓ 已记录 Idea：${item.title}`;
   if (item.type === "project" && item.dueAt) return `✓ 已记录项目，截止 ${formatConfirmation(item.dueAt, timezone)}。`;
-  if (item.type === "task") return `✓ 已添加任务：${item.title}`;
+  if (item.type === "task") {
+    const due = item.dueAt ? `\n时间：${formatConfirmation(item.dueAt, timezone)}（未设置提醒）` : "";
+    return `✓ 已添加任务：${item.title}${due}`;
+  }
   return `✓ 已记录：${item.title}`;
+}
+
+function formatScheduleConfirmation(
+  title: string,
+  dueAt: string | null,
+  reminderAt: string,
+  timezone: string,
+  verb: string,
+): string {
+  const reminder = formatConfirmation(reminderAt, timezone);
+  if (!dueAt) return `⏰ ${verb}：${reminder}\n${title}`;
+  const due = formatConfirmation(dueAt, timezone);
+  const leadMinutes = Math.round((new Date(dueAt).getTime() - new Date(reminderAt).getTime()) / 60_000);
+  if (leadMinutes > 0) {
+    return `⏰ ${verb}：${title}\n事项：${due} · 提前${formatDuration(leadMinutes)}提醒（${reminder}）`;
+  }
+  return `⏰ ${verb}：${due}\n${title}`;
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)} 天`;
+  if (minutes % 60 === 0) return `${minutes / 60} 小时`;
+  return `${minutes} 分钟`;
 }
 
 function formatSearchResults(items: Item[], timezone: string): string {

@@ -69,6 +69,31 @@ describe("QQ adapter", () => {
     });
   });
 
+  it("extracts preview text and ordinary URLs from QQ card fields", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret);
+    const body = JSON.stringify({
+      id: "event-card",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-card",
+        author: { user_openid: "qq-user-42" },
+        content: "这个招聘信息帮我记录一下",
+        timestamp: "2026-08-15T02:00:00.000Z",
+        ark_data: {
+          prompt: "研究助理招聘",
+          fields: { desc: "周五截止", jump_url: "https://example.com/jobs/ra" },
+        },
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    const parsed = await adapter.parseWebhook(qqRequest(body, signature));
+    expect(parsed).toMatchObject({ kind: "message" });
+    if (parsed.kind !== "message") throw new Error("Expected message");
+    expect(parsed.message.text).toContain("研究助理招聘");
+    expect(parsed.message.text).toContain("https://example.com/jobs/ra");
+  });
+
   it("rejects a tampered body", async () => {
     const adapter = new QQAdapter(testConfig(), officialSecret);
     const valid = JSON.stringify({ op: 0, t: "UNKNOWN", d: {} });

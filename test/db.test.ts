@@ -22,6 +22,7 @@ describe("D1 repositories", () => {
     expect(await getItem(env.DB, item.id)).toMatchObject({ title: "提交报告 100%", status: "open" });
     expect(await searchItems(env.DB, { keyword: "100%" })).toHaveLength(1);
     expect(await searchItems(env.DB, { keyword: "_a" })).toHaveLength(1);
+    await expect(searchItems(env.DB, { keyword: "\\%_".repeat(30_000) })).resolves.toEqual([]);
     await expect(completeItem(env.DB, item.id, now)).resolves.toBe(true);
     await expect(completeItem(env.DB, item.id, now)).resolves.toBe(false);
   });

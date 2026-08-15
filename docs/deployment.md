@@ -74,7 +74,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put QQ_APP_SECRET
 ```
 
-`AI_API_KEY` 可以不设置，系统会在无 AI 模式稳定运行。不要配置任何你不希望使用的付费 fallback。
+`AI_API_KEY` 可以不设置，但除 `/help` 和按钮 callback 外的自然语言理解会明确提示不可用且不会擅自保存。Composa 不会选择任何未经配置的付费 fallback。
 
 Secret 更新后检查部署与健康状态：
 
@@ -83,7 +83,7 @@ export COMPOSA_URL="https://<worker-host>"
 npm run smoke
 ```
 
-健康响应只显示通道/AI 是否已配置，不会返回 secret。
+健康响应把 AI 区分为 `configured`（Key、模型已配置）和 `verified`（当天至少一次成功调用），不会返回 secret。
 
 ## 5. 接通平台 webhook
 
@@ -94,9 +94,9 @@ npm run smoke
 
 在已授权聊天账号执行：
 
-1. 保存公开 URL，并用关键词查询。
+1. 保存公开 URL，确认回复使用网页标题，并用关键词查询。
 2. 保存 Research Idea，确认没有自动生成研究方案。
-3. 建一个几分钟后的临时提醒，确认主动推送和 `Done/Later/Reschedule`。
+3. 用口语建一个几分钟后的临时提醒，确认回复同时显示事项时间、模型选择的提前量和实际提醒时间，并验证主动推送与 `Done/Later/Reschedule`。
 4. 建 deadline project，检查 `reminders` 只有至多三条 future milestones。
 5. 用 `/api/daily-plan` 预览真实 D1 计划。
 6. 用非 allowlist 账号验证被拒绝。
