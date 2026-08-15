@@ -1,0 +1,7 @@
+# Copy to .dev.vars for local development. Never commit real values.
+AI_API_KEY=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+QQ_BOT_SECRET=
+QQ_CLIENT_SECRET=
+ADMIN_API_TOKEN=

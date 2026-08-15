@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "composa-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_NAME": "Composa",
+    "APP_LOCALE": "zh-CN",
+    "TIMEZONE": "Asia/Singapore",
+    "DAILY_PLAN_TIME": "08:00",
+    "DAILY_PLAN_TARGETS": "",
+    "AI_BASE_URL": "https://api.openai.com/v1",
+    "AI_MODEL": "test-model",
+    "AI_EMBEDDING_MODEL": "",
+    "AI_MAX_TOKENS": "600",
+    "AI_TIMEOUT_MS": "1000",
+    "AI_DAILY_REQUEST_LIMIT": "100",
+    "URL_FETCH_TIMEOUT_MS": "1000",
+    "URL_MAX_BYTES": "524288",
+    "TELEGRAM_ALLOWED_USER_IDS": "42",
+    "QQ_ALLOWED_USER_OPENIDS": "qq-user-42",
+    "QQ_APP_ID": "test-app",
+    "QQ_API_BASE_URL": "https://api.bot.qq.com",
+    "AI_API_KEY": "",
+    "TELEGRAM_BOT_TOKEN": "test-telegram-token",
+    "TELEGRAM_WEBHOOK_SECRET": "test-webhook-secret",
+    "QQ_BOT_SECRET": "naOC0ocQE3shWLAfffVLB1rhYPG7",
+    "QQ_CLIENT_SECRET": "test-client-secret",
+    "ADMIN_API_TOKEN": "test-admin-token"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "composa-test",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "composa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Composa（拾序）— Compose what matters. Find your order.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test scripts",
+    "test": "vitest run",
+    "check": "npm run types && npm run typecheck && npm run lint && npm test",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "db:migrate:local": "wrangler d1 migrations apply composa --local",
+    "db:migrate:remote": "wrangler d1 migrations apply composa --remote",
+    "db:backup": "node scripts/backup.mjs",
+    "telegram:webhook": "node scripts/setup-telegram.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "date-fns": "^4.4.0",
+    "date-fns-tz": "^3.2.0",
+    "tweetnacl": "^1.0.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.21.3",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "eslint": "^10.8.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.123.0"
+  }
+}

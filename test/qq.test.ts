@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import { QQAdapter } from "../src/channels/qq";
+import { testConfig } from "./helpers";
+
+const officialSecret = "naOC0ocQE3shWLAfffVLB1rhYPG7";
+const officialChallengeSecret = "DG5g3B4j9X2KOErG";
+
+function qqRequest(body: string, signature: string, timestamp = "1725442341"): Request {
+  return new Request("https://worker.test/webhooks/qq", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Bot-Appid": "test-app",
+      "X-Signature-Timestamp": timestamp,
+      "X-Signature-Ed25519": signature,
+    },
+    body,
+  });
+}
+
+describe("QQ adapter", () => {
+  it("matches the official webhook challenge signature vector", async () => {
+    const adapter = new QQAdapter(testConfig(), officialChallengeSecret, "client");
+    const body = JSON.stringify({ op: 13, d: { plain_token: "Arq0D5A61EgUu4OxUvOp", event_ts: "1725442341" } });
+    const parsed = await adapter.parseWebhook(qqRequest(body, "unused"));
+    expect(parsed.kind).toBe("challenge");
+    if (parsed.kind !== "challenge") throw new Error("Expected challenge");
+    await expect(parsed.response.json()).resolves.toEqual({
+      plain_token: "Arq0D5A61EgUu4OxUvOp",
+      signature: "87befc99c42c651b3aac0278e71ada338433ae26fcb24307bdc5ad38c1adc2d01bcfcadc0842edac85e85205028a1132afe09280305f13aa6909ffc2d652c706",
+    });
+  });
+
+  it("checks the app id before exposing the challenge signer", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const request = new Request("https://worker.test/webhooks/qq", {
+      method: "POST",
+      headers: { "X-Bot-Appid": "another-app" },
+      body: JSON.stringify({ op: 13, d: { plain_token: "token", event_ts: "1" } }),
+    });
+    await expect(adapter.parseWebhook(request)).resolves.toEqual({ kind: "unauthorized" });
+  });
+
+  it("verifies and normalizes a C2C message", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const body = JSON.stringify({
+      id: "event-1",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-1",
+        author: { user_openid: "qq-user-42" },
+        content: "提醒我明天交报告",
+        timestamp: "2026-08-15T02:00:00.000Z",
+        message_scene: { ext: ["msg_idx=2"] },
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    await expect(adapter.parseWebhook(qqRequest(body, signature))).resolves.toMatchObject({
+      kind: "message",
+      message: {
+        channel: "qq",
+        eventId: "c2c:message-1:2",
+        messageId: "message-1",
+        userId: "qq-user-42",
+      },
+    });
+  });
+
+  it("rejects a tampered body", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const valid = JSON.stringify({ op: 0, t: "UNKNOWN", d: {} });
+    const signature = adapter.signChallenge("1725442341", valid);
+    const tampered = JSON.stringify({ op: 0, t: "OTHER", d: {} });
+    await expect(adapter.parseWebhook(qqRequest(tampered, signature))).resolves.toEqual({ kind: "unauthorized" });
+  });
+
+  it("fetches an app token and sends a C2C keyboard", async () => {
+    const calls: Array<{ url: string; body: unknown; authorization: string | null }> = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push({
+        url,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) as unknown : null,
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      if (url.endsWith("/app/getAppAccessToken")) return Response.json({ access_token: "access", expires_in: "7200" });
+      return Response.json({ id: "qq-reply-1", timestamp: "2026-08-15T02:00:01.000Z" });
+    };
+    const adapter = new QQAdapter(testConfig(), officialSecret, "client", fetcher);
+    const receipt = await adapter.send({ channel: "qq", userId: "qq-user-42" }, {
+      text: "提醒",
+      buttons: [[{ label: "完成", action: "done:item-1", style: "primary" }]],
+    });
+    expect(calls[0]).toMatchObject({ body: { appId: "test-app", clientSecret: "client" }, authorization: null });
+    expect(calls[1]).toMatchObject({
+      url: "https://api.bot.qq.com/v2/users/qq-user-42/messages",
+      authorization: "QQBot access",
+      body: { content: "提醒", msg_type: 0 },
+    });
+    expect(calls[1]?.body).toHaveProperty("keyboard.content.rows.0.buttons.0.action.data", "done:item-1");
+    expect(receipt).toEqual({ channel: "qq", messageId: "qq-reply-1", deliveredAt: "2026-08-15T02:00:01.000Z" });
+  });
+
+  it("falls back to text when the QQ app lacks custom-keyboard permission", async () => {
+    const messageBodies: unknown[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/app/getAppAccessToken")) return Response.json({ access_token: "access", expires_in: 7200 });
+      if (typeof init?.body !== "string") throw new Error("Expected JSON body");
+      messageBodies.push(JSON.parse(init.body) as unknown);
+      if (messageBodies.length === 1) return new Response("keyboard denied", { status: 403 });
+      return Response.json({ id: "plain-reply" });
+    };
+    const adapter = new QQAdapter(testConfig(), officialSecret, "client", fetcher);
+    await expect(adapter.send({ channel: "qq", userId: "qq-user-42" }, {
+      text: "提醒",
+      buttons: [[{ label: "完成", action: "done:item-1" }]],
+    })).resolves.toMatchObject({ messageId: "plain-reply" });
+    expect(messageBodies[0]).toHaveProperty("keyboard");
+    expect(messageBodies[1]).not.toHaveProperty("keyboard");
+  });
+});
