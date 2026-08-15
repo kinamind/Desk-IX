@@ -3,7 +3,7 @@
 > Compose what matters. Find your order.
 > 拾起零碎，归之有序。
 
-Composa 来自 **compose + persona**。它是一个长期待在聊天工具里的轻量个人秘书：把随手发来的链接、研究想法、待办和 deadline 接住，理解后存进自己的数据库，在需要时重新找到或提醒你。
+Composa 来自 **compose + persona**。它是一个长期待在聊天工具里的轻量个人 Agent：能结合近期上下文理解你是在聊天、查找、分析，还是要新增、完成、舍弃、恢复或修改一件事，然后调用受控工具替你执行。
 
 它刻意不是一个会操作电脑、浏览器或 shell 的通用自主 Agent。核心链路只有：
 
@@ -14,14 +14,15 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 ## 能力
 
 - Telegram 与 QQ 双通道，自然语言直接输入，不要求命令格式
-- Resource、Idea、Task、Project/Deadline、Query 五类核心意图
+- 有状态的 Agent 决策层：先读当前用户的近期记录，再选择回复、查询、分析或行动
+- 自然语言完成、舍弃、恢复和修改已有事项；支持一句话执行多个动作，状态变化不会复制出新待办
 - D1 作为唯一 source of truth，保留用户原文与 AI enrichment 的边界
 - AI-first 自然语言理解：中文数字、口语时间、事项时间与提醒时间由模型统一解释
 - 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
 - Cloudflare Workflows 一次性提醒与少量 deadline milestones
 - Cron 驱动、D1 事实驱动的简洁 Daily Plan
-- `Done`、`Later`、`Reschedule`、`Details` 交互按钮
+- `完成`、`舍弃`、`稍后`、`改期`、`详情` 交互按钮；舍弃只归档，可随时恢复
 - OpenAI-compatible API，可关闭、可限额、没有未经配置的付费 fallback
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
 - 内置基础网页阅读工具：发现普通 URL 后有界抓取正文、标题和来源；登录/验证页面诚实降级
@@ -33,8 +34,9 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 flowchart LR
   TG["Telegram"] --> WH["Cloudflare Worker"]
   QQ["QQ Bot"] --> WH
-  WH --> AI["AI-first Understanding"]
-  AI --> EX["Validated Code Execution"]
+  WH --> CTX["User-scoped D1 Context"]
+  CTX --> AI["Contextual Action Planner"]
+  AI --> EX["Validated Tool Execution"]
   EX --> WEB["Basic Web Reader"]
   EX --> D1[("D1")]
   EX --> WF["Cloudflare Workflows"]
@@ -115,7 +117,9 @@ curl http://127.0.0.1:8787/health
 | `POST` | `/webhooks/qq` | App ID + Ed25519 + allowlist | QQ challenge/event |
 | `GET` | `/api/items` | Admin Bearer | `type`、`status`、`q`、`limit` 查询 |
 | `GET` | `/api/items/:id` | Admin Bearer | 单项详情 |
-| `POST` | `/api/items/:id/complete` | Admin Bearer | 标记完成 |
+| `POST` | `/api/items/:id/complete` | Admin Bearer | 标记完成并取消待发送提醒 |
+| `POST` | `/api/items/:id/archive` | Admin Bearer | 舍弃/归档并取消待发送提醒 |
+| `POST` | `/api/items/:id/restore` | Admin Bearer | 恢复为 open |
 | `POST` | `/api/daily-plan` | Admin Bearer | 预览；加 `?send=1` 排队发送 |
 
 ## 验证
@@ -125,7 +129,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖 AI-first 结构化意图、延后提醒策略、模型时间纠偏、CRUD、重复 webhook、Workflow 调度、callback、时区、deadline milestones、Telegram/QQ 授权与 QQ 官方 Ed25519 challenge 向量、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖带上下文的行动规划、自然语言完成/舍弃/恢复/修改、多动作、聊天不落库、延后提醒策略、CRUD、重复 webhook、Workflow 调度、callback、时区、Telegram/QQ 授权、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
 
 ## 项目结构
 

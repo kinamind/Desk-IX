@@ -96,11 +96,14 @@ npm run smoke
 
 1. 保存公开 URL，确认回复使用网页标题，并用关键词查询。
 2. 保存 Research Idea，确认没有自动生成研究方案。
-3. 用口语建一个稍后处理的任务，确认模型没有选择当前时间，回复分别显示提醒时间与截止时间，并验证主动推送与 `Done/Later/Reschedule`。
-4. 建 deadline project，检查 `reminders` 只有至多三条 future milestones。
-5. 用 `/api/daily-plan` 预览真实 D1 计划。
-6. 用非 allowlist 账号验证被拒绝。
-7. 再次 `npm run deploy`，确认 D1 item 与 Workflow reminder 未丢失。
+3. 用口语建一个稍后处理的任务，确认模型没有选择当前时间，回复分别显示提醒时间与截止时间，并验证主动推送与“完成/稍后/改期/舍弃”。
+4. 紧接着说“刚才那个已经完成了”，确认原事项变为 completed、待提醒取消，并且没有生成重复记录。
+5. 新建两条临时事项，再用一句话完成一条、舍弃另一条；随后用自然语言恢复舍弃项。
+6. 发一句普通追问或闲聊，确认正常回复且不会自动写成 note/task。
+7. 建 deadline project，检查 `reminders` 只有至多三条 future milestones。
+8. 用 `/api/daily-plan` 预览真实 D1 计划。
+9. 用非 allowlist 账号验证被拒绝。
+10. 再次 `npm run deploy`，确认 D1 item 与 Workflow reminder 未丢失。
 
 查看 D1：
 

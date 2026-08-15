@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { createItem, completeItem, getItem, searchItems } from "../src/db/items";
+import { archiveItem, createItem, completeItem, getItem, listAgentContextItems, restoreItem, searchItems, searchOwnedItems, updateItem } from "../src/db/items";
 import { claimMessage, failMessage } from "../src/db/messages";
 import { createReminder, markReminderFailed } from "../src/db/reminders";
 import type { IncomingMessage } from "../src/core/types";
@@ -81,5 +81,45 @@ describe("D1 repositories", () => {
     await markReminderFailed(env.DB, first.reminder.id, "workflow unavailable");
     const retry = await createReminder(env.DB, input, now);
     expect(retry).toMatchObject({ created: true, reminder: { id: first.reminder.id, status: "pending" } });
+  });
+
+  it("scopes agent context and searches to the current user", async () => {
+    await createItem(env.DB, {
+      type: "note",
+      title: "我的记录",
+      content: "只属于我",
+      rawMessage: "只属于我",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "scope-me",
+    }, now);
+    await createItem(env.DB, {
+      type: "note",
+      title: "别人的记录",
+      content: "不应该暴露",
+      rawMessage: "不应该暴露",
+      sourceChannel: "qq",
+      sourceUserId: "other",
+      sourceMessageId: "scope-other",
+    }, now);
+
+    await expect(listAgentContextItems(env.DB, "qq", "me")).resolves.toMatchObject([{ title: "我的记录" }]);
+    await expect(searchOwnedItems(env.DB, "qq", "me", { limit: 10 })).resolves.toMatchObject([{ title: "我的记录" }]);
+  });
+
+  it("updates, archives, and restores without deleting the item", async () => {
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "原标题",
+      content: "原内容",
+      rawMessage: "原内容",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "lifecycle-item",
+    }, now);
+    await expect(updateItem(env.DB, item.id, { title: "新标题", dueAt: "2026-08-18T02:00:00.000Z" }, now)).resolves.toBe(true);
+    await expect(archiveItem(env.DB, item.id, now)).resolves.toBe(true);
+    await expect(restoreItem(env.DB, item.id, now)).resolves.toBe(true);
+    await expect(getItem(env.DB, item.id)).resolves.toMatchObject({ title: "新标题", status: "open", dueAt: "2026-08-18T02:00:00.000Z" });
   });
 });

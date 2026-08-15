@@ -6,8 +6,8 @@ Composa 是单 Worker、单业务处理器、单 D1 数据源的 IM-first Agent�
 
 关键边界：**LLM understands; code executes.**
 
-- LLM 是普通自然语言的第一理解层，负责意图、时间语义、查询过滤、合理的未来行动提醒、网页摘要、Daily Plan 排序和明确要求的分析。
-- 代码只校验模型结构化输出，并处理权限、CRUD、时间合法性、回调、去重、提醒、重试与调度。
+- LLM 是带上下文的决策层。它读取当前用户的近期 D1 事项，判断本轮应回复、查询、分析，还是规划一个或多个 `create / complete / archive / restore / update` 动作。
+- 代码校验结构化行动计划、核对目标事项归属，再处理 CRUD、时间合法性、回调、去重、提醒、重试与调度。模型不能直接写库或调用网络。
 - `/help` 与平台 callback 不需要模型。其他自然语言在 AI 未配置、超过预算或暂时失败时会明确提示且不擅自保存，不会静默伪装成已经理解，也不会选择另一个付费模型。
 
 ## 请求链路
@@ -16,14 +16,14 @@ Composa 是单 Worker、单业务处理器、单 D1 数据源的 IM-first Agent�
 2. Channel Adapter 检查个人 allowlist，并归一化为 `IncomingMessage`。
 3. HTTP 请求尽快返回；实际处理进入 `ctx.waitUntil()`。
 4. `messages` 表用 `(channel, source_message_id)` 抢占事件，重复事件直接结束。
-5. 除 `/help` 外，普通消息直接调用 AI structured output；小歧义由模型做可逆判断，重大歧义才追问。
-6. 业务层校验输出并写 D1；发现 URL 后调用基础网页阅读工具，有界提取标题、来源和正文，再做 AI enrichment。QQ 卡片会一并检查预览、隐藏字段与附件中的 URL。
+5. 除 `/help` 外，业务层先读取当前通道、当前用户的近期事项与最近几轮已处理对话，再调用 AI 输出结构化行动计划；历史只用于事实与指代，不会重复执行。小歧义由模型做可逆判断，只有多个目标同样合理且误操作代价明显时才追问。
+6. 业务层先验证全部目标 id 和用户归属，再执行确定性工具。完成与舍弃会取消未发送提醒；舍弃是可恢复的 `archived` 状态，不做物理删除。发现 URL 后调用基础网页阅读工具，有界提取标题、来源和正文，再做 AI enrichment。
 7. 需要提醒时先写 `reminders`，再以确定性 ID 创建 Workflow。
 8. 回复通过来源 Channel Adapter 发出，最后将 message 标记为 processed。
 
 ## 数据模型
 
-- `items`：resource、idea、task、note、project 的统一对象。`raw_message` 永远保留；`ai_enrichment` 与用户原文分开。
+- `items`：resource、idea、task、note、project 的统一对象。`raw_message` 永远保留；`ai_enrichment` 与用户原文分开；`source_action_index` 允许一条消息安全地产生多项记录。
 - `reminders`：提醒时间、目标通道、Workflow ID、发送状态和 receipt。
 - `messages`：最小必要原始事件、处理状态、错误、响应和关联 item，用于去重与诊断。
 - `pending_actions`：`Reschedule` 后的短期会话状态，默认 30 分钟。

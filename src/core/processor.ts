@@ -5,15 +5,28 @@ import { OpenAICompatibleProvider, parseAIJson } from "../ai/openai-compatible";
 import { SECRETARY_STYLE, URL_ENRICHMENT_PROMPT } from "../ai/prompts";
 import type { AIProvider } from "../ai/provider";
 import { getChannelAdapter } from "../channels/registry";
-import { createItem, getItem, getItemBySource, mergeItemEnrichment, searchItems, updateItemSchedule } from "../db/items";
-import { failMessage, finishMessage, claimMessage } from "../db/messages";
+import {
+  archiveItem,
+  completeItem,
+  createItem,
+  getItem,
+  getItemBySource,
+  getOwnedItem,
+  listAgentContextItems,
+  mergeItemEnrichment,
+  restoreItem,
+  searchOwnedItems,
+  updateItem,
+  updateItemSchedule,
+} from "../db/items";
+import { failMessage, finishMessage, claimMessage, listRecentConversation } from "../db/messages";
 import { setPendingAction, takePendingAction } from "../db/pending-actions";
 import { cancelOpenReminders } from "../db/reminders";
 import { discoverUrls, readWebPage } from "../url/reader";
 import { handleCallback } from "./callbacks";
 import { generateDeadlineMilestones } from "./milestones";
 import { scheduleReminder } from "./reminder-service";
-import type { IncomingMessage, Item, OutgoingMessage, ParsedIntent } from "./types";
+import type { CreateItemAgentAction, IncomingMessage, Item, OutgoingMessage, ParsedIntent, ReminderMode } from "./types";
 import { log } from "../observability/log";
 
 const urlEnrichmentSchema = z.object({
@@ -59,7 +72,7 @@ export async function processIncoming(
     } else {
       const pending = await takePendingAction(env.DB, incoming.channel, incoming.userId, now);
       if (pending?.action === "reschedule") {
-        const item = await getItem(env.DB, pending.itemId);
+        const item = await getOwnedItem(env.DB, pending.itemId, incoming.channel, incoming.userId);
         if (!item) throw new Error("Pending reschedule item no longer exists");
         const schedule = await resolveScheduleChange(incoming.text, { title: item.title, dueAt: item.dueAt }, provider, now, config.timezone);
         if (schedule.question || !schedule.reminderAt) {
@@ -85,7 +98,9 @@ export async function processIncoming(
           itemId = item.id;
         }
       } else {
-        const intent = await routeMessage(incoming.text, provider, now, config.timezone);
+        const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId);
+        const conversation = await listRecentConversation(env.DB, incoming.channel, incoming.userId);
+        const intent = await routeMessage(incoming.text, provider, now, config.timezone, contextItems, conversation);
         const result = await executeIntent(env, incoming, intent, provider, fetcher, now);
         output = result.output;
         itemId = result.itemId;
@@ -119,19 +134,24 @@ async function executeIntent(
   }
   if (intent.intent === "help") {
     return {
-      output: { text: "直接发给我：链接、idea、待办、deadline 或提醒。也可以问“这周还有什么？”\n按钮可直接完成、延后或改期。" },
+      output: { text: "直接像和助理说话一样发给我：记事、安排提醒、读链接、查找、分析都可以。\n也可以说“这个做完了”“那件事不做了”“把它改到周五”；我会结合近期记录处理。" },
       itemId: null,
     };
   }
 
+  if (intent.intent === "respond") {
+    return { output: { text: intent.reply?.trim() || "我在。" }, itemId: null };
+  }
+
   if (intent.intent === "query") {
-    const items = await searchItems(env.DB, intent.query ?? { limit: 10 });
+    const items = await searchOwnedItems(env.DB, incoming.channel, incoming.userId, intent.query ?? { limit: 10 });
     return { output: { text: formatSearchResults(items, config.timezone) }, itemId: null };
   }
 
   if (intent.intent === "analyze") {
     if (!provider) return { output: { text: "AI 还未配置；设置 AI_API_KEY 后可以展开分析。" }, itemId: null };
     let webContext: Record<string, unknown> | null = null;
+    const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId, 12);
     const url = discoverUrls(incoming.text, 1)[0];
     if (url) {
       try {
@@ -153,7 +173,20 @@ async function executeIntent(
         maxTokens: Math.min(config.aiMaxTokens, 1200),
         messages: [
           { role: "system", content: `${SECRETARY_STYLE}\n用户这次明确要求分析，可以展开，但保持结构清楚。若提供了网页正文，只根据真实正文分析。` },
-          { role: "user", content: JSON.stringify({ message: incoming.text, webpage: webContext }) },
+          {
+            role: "user",
+            content: JSON.stringify({
+              message: incoming.text,
+              webpage: webContext,
+              recent_items: contextItems.map((item) => ({
+                id: item.id,
+                title: item.title,
+                content: item.content.slice(0, 500),
+                status: item.status,
+                due_at: item.dueAt,
+              })),
+            }),
+          },
         ],
       });
       return { output: { text: response.text.slice(0, 3500) }, itemId: null };
@@ -163,27 +196,109 @@ async function executeIntent(
     }
   }
 
-  const discoveredUrl = intent.url ?? discoverUrls(incoming.text, 1)[0] ?? null;
-  const type = intent.type ?? (discoveredUrl ? "resource" : "note");
-  let item = await getItemBySource(env.DB, incoming.channel, incoming.eventId);
+  if (intent.intent !== "act" || !intent.actions?.length) {
+    return { output: { text: "我还不能确定要执行什么，没有改动任何记录。" }, itemId: null };
+  }
+
+  const targetItems = new Map<string, Item>();
+  for (const action of intent.actions) {
+    if (action.action === "create_item") continue;
+    const item = await getOwnedItem(env.DB, action.targetItemId, incoming.channel, incoming.userId);
+    if (!item) {
+      return { output: { text: "我没能安全地对应到那条记录，没有改动任何事项。你可以再说一下标题。" }, itemId: null };
+    }
+    targetItems.set(item.id, item);
+  }
+
+  const confirmations: string[] = [];
+  let resultItemId: string | null = null;
+  for (const [actionIndex, action] of intent.actions.entries()) {
+    if (action.action === "create_item") {
+      const result = await executeCreateAction(env, incoming, action, actionIndex, intent.aiEnrichment ?? {}, provider, fetcher, now);
+      confirmations.push(result.text);
+      resultItemId ??= result.item.id;
+      continue;
+    }
+
+    const item = targetItems.get(action.targetItemId);
+    if (!item) throw new Error("Validated item disappeared during action execution");
+    resultItemId ??= item.id;
+
+    if (action.action === "complete_item") {
+      const changed = await completeItem(env.DB, item.id, now);
+      await cancelOpenReminders(env.DB, item.id);
+      confirmations.push(changed ? `✓ 已完成：${item.title}` : `✓ 已是完成状态：${item.title}`);
+      continue;
+    }
+    if (action.action === "archive_item") {
+      const changed = await archiveItem(env.DB, item.id, now);
+      await cancelOpenReminders(env.DB, item.id);
+      confirmations.push(changed ? `✓ 已舍弃：${item.title}` : `✓ 已是舍弃状态：${item.title}`);
+      continue;
+    }
+    if (action.action === "restore_item") {
+      const changed = await restoreItem(env.DB, item.id, now);
+      confirmations.push(changed ? `↩ 已恢复：${item.title}` : `↩ 这条记录当前无需恢复：${item.title}`);
+      continue;
+    }
+
+    if (action.action !== "update_item") throw new Error("Unsupported agent action");
+    const { reminderAt, reminderMode } = action;
+    await updateItem(env.DB, item.id, action, now);
+    const changesReminder = Object.hasOwn(action, "reminderAt") || Object.hasOwn(action, "reminderMode");
+    if (changesReminder) {
+      await cancelOpenReminders(env.DB, item.id);
+      if (reminderAt) {
+        await scheduleReminder(env, {
+          itemId: item.id,
+          remindAt: reminderAt,
+          kind: reminderMode ?? "updated",
+          target: { channel: incoming.channel, userId: incoming.userId },
+        }, now);
+      }
+    }
+    const updated = await getItem(env.DB, item.id) ?? item;
+    confirmations.push(reminderAt
+      ? formatScheduleConfirmation(updated.title, updated.dueAt, reminderAt, config.timezone, "已更新", reminderMode)
+      : `✓ 已更新：${updated.title}`);
+  }
+
+  return { output: { text: confirmations.join("\n") }, itemId: resultItemId };
+}
+
+async function executeCreateAction(
+  env: Env,
+  incoming: IncomingMessage,
+  action: CreateItemAgentAction,
+  actionIndex: number,
+  aiEnrichment: Record<string, unknown>,
+  provider: AIProvider | null,
+  fetcher: typeof fetch,
+  now: Date,
+): Promise<{ text: string; item: Item }> {
+  const config = getConfig(env);
+  const discoveredUrl = action.url ?? discoverUrls(incoming.text, 1)[0] ?? null;
+  const type = action.type ?? (discoveredUrl ? "resource" : "note");
+  let item = await getItemBySource(env.DB, incoming.channel, incoming.eventId, actionIndex);
   if (!item) {
     item = await createItem(env.DB, {
       type,
-      title: intent.title?.trim().slice(0, 100) || incoming.text.slice(0, 60),
-      content: intent.content ?? incoming.text,
+      title: action.title?.trim().slice(0, 100) || incoming.text.slice(0, 60),
+      content: action.content ?? incoming.text,
       rawMessage: incoming.text,
       url: discoveredUrl,
-      tags: intent.tags ?? [],
-      ...(intent.status ? { status: intent.status } : {}),
-      ...(intent.priority ? { priority: intent.priority } : {}),
-      ...(intent.estimatedDuration !== undefined ? { estimatedDuration: intent.estimatedDuration } : {}),
-      ...(intent.dueAt !== undefined ? { dueAt: intent.dueAt } : {}),
-      ...(intent.startAfter !== undefined ? { startAfter: intent.startAfter } : {}),
-      ...(intent.originalTimeExpression !== undefined ? { originalTimeExpression: intent.originalTimeExpression } : {}),
+      tags: action.tags ?? [],
+      ...(action.status ? { status: action.status } : {}),
+      ...(action.priority ? { priority: action.priority } : {}),
+      ...(action.estimatedDuration !== undefined ? { estimatedDuration: action.estimatedDuration } : {}),
+      ...(action.dueAt !== undefined ? { dueAt: action.dueAt } : {}),
+      ...(action.startAfter !== undefined ? { startAfter: action.startAfter } : {}),
+      ...(action.originalTimeExpression !== undefined ? { originalTimeExpression: action.originalTimeExpression } : {}),
       sourceChannel: incoming.channel,
       sourceUserId: incoming.userId,
       sourceMessageId: incoming.eventId,
-      aiEnrichment: intent.aiEnrichment ?? {},
+      sourceActionIndex: actionIndex,
+      aiEnrichment,
     }, now);
   }
 
@@ -228,11 +343,11 @@ async function executeIntent(
     }
   }
 
-  if (intent.reminderAt) {
+  if (action.reminderAt) {
     await scheduleReminder(env, {
       itemId: item.id,
-      remindAt: intent.reminderAt,
-      kind: intent.reminderMode ?? "reminder",
+      remindAt: action.reminderAt,
+      kind: action.reminderMode ?? "reminder",
       target: { channel: incoming.channel, userId: incoming.userId },
     }, now);
   }
@@ -247,10 +362,10 @@ async function executeIntent(
     }
   }
 
-  return { output: { text: confirmation(item, intent.reminderAt, intent.reminderMode, urlFetchFailed, config.timezone) }, itemId: item.id };
+  return { text: confirmation(item, action.reminderAt, action.reminderMode, urlFetchFailed, config.timezone), item };
 }
 
-function confirmation(item: Item, reminderAt: string | null | undefined, reminderMode: ParsedIntent["reminderMode"], urlFetchFailed: boolean, timezone: string): string {
+function confirmation(item: Item, reminderAt: string | null | undefined, reminderMode: ReminderMode | null | undefined, urlFetchFailed: boolean, timezone: string): string {
   if (reminderMode === "explicit_now") {
     const due = item.dueAt ? `\n截止：${formatConfirmation(item.dueAt, timezone)}` : "";
     return `🔔 ${item.title}${due}`;
@@ -272,7 +387,7 @@ function formatScheduleConfirmation(
   reminderAt: string,
   timezone: string,
   verb: string,
-  reminderMode?: ParsedIntent["reminderMode"],
+  reminderMode?: ReminderMode | null,
 ): string {
   const reminder = formatConfirmation(reminderAt, timezone);
   if (!dueAt) return `⏰ ${verb}：${reminder}\n${title}`;

@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "../core/types";
+import type { ChannelName, ConversationTurn, IncomingMessage } from "../core/types";
 
 interface MessageClaimRow {
   id: string;
@@ -14,6 +14,34 @@ export interface MessageClaim {
   status: string;
   itemId: string | null;
   responseText: string | null;
+}
+
+interface ConversationRow {
+  text: string;
+  response_text: string;
+  received_at: string;
+}
+
+export async function listRecentConversation(
+  db: D1Database,
+  channel: ChannelName,
+  userId: string,
+  limit = 6,
+): Promise<ConversationTurn[]> {
+  const boundedLimit = Math.min(Math.max(limit, 1), 10);
+  const result = await db.prepare(`
+    SELECT text, response_text, received_at
+    FROM messages
+    WHERE channel = ? AND user_id = ? AND event_type = 'message'
+      AND status = 'processed' AND response_text IS NOT NULL
+    ORDER BY received_at DESC
+    LIMIT ?
+  `).bind(channel, userId, boundedLimit).all<ConversationRow>();
+  return result.results.reverse().map((row) => ({
+    user: row.text.slice(0, 1_500),
+    assistant: row.response_text.slice(0, 1_500),
+    receivedAt: row.received_at,
+  }));
 }
 
 export async function claimMessage(db: D1Database, message: IncomingMessage, now = new Date()): Promise<MessageClaim> {
