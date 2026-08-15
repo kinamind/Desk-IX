@@ -27,7 +27,7 @@
     {
       "binding": "DB",
       "database_name": "composa",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "6bba1d9f-2338-491c-a9d4-c51e3f47e64c",
       "migrations_dir": "migrations"
     }
   ],
