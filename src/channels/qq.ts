@@ -63,6 +63,30 @@ function messageIndex(ext: string[] | undefined): string | null {
   return entry ? entry.slice("msg_idx=".length) : null;
 }
 
+function cardFieldText(fields: Record<string, unknown> | undefined, maxChars = 8_000): string {
+  if (!fields) return "";
+  const values: string[] = [];
+  let visited = 0;
+  const visit = (value: unknown, depth: number): void => {
+    visited += 1;
+    if (visited > 200 || values.join("\n").length >= maxChars || depth > 4) return;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed && !values.includes(trimmed)) values.push(trimmed);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, 30)) visit(entry, depth + 1);
+      return;
+    }
+    if (value && typeof value === "object") {
+      for (const entry of Object.values(value).slice(0, 30)) visit(entry, depth + 1);
+    }
+  };
+  visit(fields, 0);
+  return values.join("\n").slice(0, maxChars);
+}
+
 export class QQAdapter implements ChannelAdapter {
   public constructor(
     private readonly config: RuntimeConfig,
@@ -107,8 +131,10 @@ export class QQAdapter implements ChannelAdapter {
       }
       const index = messageIndex(data.message_scene?.ext);
       const attachmentText = data.attachments?.map((attachment) => attachment.asr_refer_text ?? attachment.url ?? "").filter(Boolean).join("\n") ?? "";
-      const cardText = data.ark_data?.prompt ?? "";
-      const text = [data.content, cardText, attachmentText].filter(Boolean).join("\n").trim();
+      const cardText = [data.ark_data?.prompt ?? "", cardFieldText(data.ark_data?.fields)].filter(Boolean).join("\n");
+      const fullText = [data.content, cardText, attachmentText].filter(Boolean).join("\n").trim();
+      const text = fullText.slice(0, 20_000);
+      if (text.length < fullText.length) log("warn", "qq_message_text_truncated", { originalChars: fullText.length, keptChars: text.length });
       if (!text) return { kind: "ignored" };
       const incoming: IncomingMessage = {
         channel: "qq",

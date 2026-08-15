@@ -66,6 +66,7 @@ https://<worker-host>/webhooks/qq
 ## 5. 消息与按钮行为
 
 - 收消息：`C2C_MESSAGE_CREATE`，使用 `message id + msg_idx` 去重。
+- 分享卡片：合并 `ark_data.prompt`、隐藏 fields 与附件文本；其中出现正常 HTTP(S) URL 时继续调用网页阅读工具。若平台只给内部卡片 ID/小程序 scheme，则保留并理解预览内容，但不会猜造公开网址。
 - 回复：`POST /v2/users/{user_openid}/messages`；即时回复携带原 `msg_id`。
 - 主动提醒：同一 endpoint，不携带原 `msg_id`，因此依赖主动消息授权。
 - 按钮：发送自定义 keyboard，data 与 Telegram 共用 `done/later/reschedule/details` 协议。
@@ -79,3 +80,4 @@ https://<worker-host>/webhooks/qq
 - 普通回复成功、定时提醒失败：通常是主动消息授权/配额，而不是 Workflow 时间问题。
 - 按钮不显示：申请 keyboard 权限；Composa 会退化为纯文本，仍可发自然语言操作。
 - `QQBot` token 错误：确认 `QQ_APP_SECRET`；Access Token 由 Worker 临时获取，不持久化、不记录日志。
+- 卡片能保存但读不到原网页：检查 QQ 回调是否提供正常 HTTP(S) 跳转地址；内部卡片 ID 无法可靠反推出公开 URL。

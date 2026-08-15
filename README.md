@@ -16,13 +16,15 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 - Telegram 与 QQ 双通道，自然语言直接输入，不要求命令格式
 - Resource、Idea、Task、Project/Deadline、Query 五类核心意图
 - D1 作为唯一 source of truth，保留用户原文与 AI enrichment 的边界
-- 中文/英文常见相对时间的确定性解析，默认 `Asia/Singapore`
+- AI-first 自然语言理解：中文数字、口语时间、事项时间与提醒时间由模型统一解释
+- 对可逆小歧义自主选择合理提醒提前量，并在确认消息中明确展示
 - Cloudflare Workflows 一次性提醒与少量 deadline milestones
 - Cron 驱动、D1 事实驱动的简洁 Daily Plan
 - `Done`、`Later`、`Reschedule`、`Details` 交互按钮
 - OpenAI-compatible API，可关闭、可限额、没有未经配置的付费 fallback
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
-- URL best-effort 抓取；网页失败也会先保存原始消息和 URL
+- 内置基础网页阅读工具：发现普通 URL 后有界抓取正文、标题和来源；登录/验证页面诚实降级
+- QQ 分享卡片同时读取预览、隐藏字段与附件，能取得正常 URL 时继续读取原网页
 
 ## 架构
 
@@ -30,10 +32,11 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 flowchart LR
   TG["Telegram"] --> WH["Cloudflare Worker"]
   QQ["QQ Bot"] --> WH
-  WH --> RT["Deterministic-first Router"]
-  RT --> D1[("D1")]
-  RT -. "必要时" .-> AI["OpenAI-compatible API"]
-  RT --> WF["Cloudflare Workflows"]
+  WH --> AI["AI-first Understanding"]
+  AI --> EX["Validated Code Execution"]
+  EX --> WEB["Basic Web Reader"]
+  EX --> D1[("D1")]
+  EX --> WF["Cloudflare Workflows"]
   WF --> D1
   WF --> TG
   WF --> QQ
@@ -106,7 +109,7 @@ curl http://127.0.0.1:8787/health
 
 | Method | Path | 权限 | 说明 |
 |---|---|---|---|
-| `GET` | `/health` | 公开 | D1 与通道配置状态，不返回秘密 |
+| `GET` | `/health` | 公开 | D1、通道及 AI `configured/verified` 状态，不返回秘密 |
 | `POST` | `/webhooks/telegram` | Telegram secret + allowlist | Telegram update |
 | `POST` | `/webhooks/qq` | App ID + Ed25519 + allowlist | QQ challenge/event |
 | `GET` | `/api/items` | Admin Bearer | `type`、`status`、`q`、`limit` 查询 |
@@ -121,7 +124,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖意图到业务写入、CRUD、重复 webhook、提醒调度、callback、相对时间/时区、deadline milestones、Telegram/QQ 授权与 QQ 官方 Ed25519 challenge 向量、URL 安全、查询和 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖 AI-first 结构化意图、模型自主提醒提前量、CRUD、重复 webhook、Workflow 调度、callback、时区、deadline milestones、Telegram/QQ 授权与 QQ 官方 Ed25519 challenge 向量、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
 
 ## 项目结构
 
@@ -133,7 +136,7 @@ src/
   db/             参数化 D1 repositories
   http/           Worker 路由与有限 body reader
   security/       token 比较与 SSRF 防护
-  url/            有界网页获取与 metadata 抽取
+  url/            基础网页阅读工具：URL 发现、有界获取、正文与 metadata 抽取
   workflows/      durable reminder workflow
 migrations/       版本化 D1 schema
 test/             Workers runtime 自动化测试

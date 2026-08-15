@@ -6,9 +6,9 @@ Composa 是单 Worker、单业务处理器、单 D1 数据源的 IM-first Agent�
 
 关键边界：**LLM understands; code executes.**
 
-- LLM 只处理模糊意图、字段抽取、网页摘要、Daily Plan 排序和明确要求的分析。
-- 代码处理权限、CRUD、日期、查询、回调、去重、提醒、重试与调度。
-- 没有 API Key、超过日预算或 AI 暂时不可用时，系统退化为确定性路由和忠实 note，而不是选择另一个付费模型。
+- LLM 是普通自然语言的第一理解层，负责意图、时间语义、查询过滤、合理提醒提前量、网页摘要、Daily Plan 排序和明确要求的分析。
+- 代码只校验模型结构化输出，并处理权限、CRUD、时间合法性、回调、去重、提醒、重试与调度。
+- `/help` 与平台 callback 不需要模型。其他自然语言在 AI 未配置、超过预算或暂时失败时会明确提示且不擅自保存，不会静默伪装成已经理解，也不会选择另一个付费模型。
 
 ## 请求链路
 
@@ -16,8 +16,8 @@ Composa 是单 Worker、单业务处理器、单 D1 数据源的 IM-first Agent�
 2. Channel Adapter 检查个人 allowlist，并归一化为 `IncomingMessage`。
 3. HTTP 请求尽快返回；实际处理进入 `ctx.waitUntil()`。
 4. `messages` 表用 `(channel, source_message_id)` 抢占事件，重复事件直接结束。
-5. 先匹配确定性意图；只有不明确时才调用一次 AI structured output。
-6. 业务层写 D1；Resource 永远先保存原始消息/URL，再 best-effort 抓网页。
+5. 除 `/help` 外，普通消息直接调用 AI structured output；小歧义由模型做可逆判断，重大歧义才追问。
+6. 业务层校验输出并写 D1；发现 URL 后调用基础网页阅读工具，有界提取标题、来源和正文，再做 AI enrichment。QQ 卡片会一并检查预览、隐藏字段与附件中的 URL。
 7. 需要提醒时先写 `reminders`，再以确定性 ID 创建 Workflow。
 8. 回复通过来源 Channel Adapter 发出，最后将 message 标记为 processed。
 
@@ -63,7 +63,7 @@ Cron 每 15 分钟运行一次，因为 Cron 使用 UTC，而业务时间可配�
 - 所有 SQL 都使用 `prepare().bind()`。
 - Admin API 与 Telegram secret 使用恒定时间摘要比较。
 - QQ 对 raw body 做 Ed25519 验签，并在签 challenge 前校验 App ID。
-- URL 只接受公开 HTTP(S) 字面地址，手动验证每次 redirect，限制 timeout/content-type/bytes。DNS rebinding 仍属于平台网络层边界，不把网页内容当可信输入。
+- 网页阅读工具只接受公开 HTTP(S) 字面地址，手动验证每次 redirect，限制 timeout/content-type/bytes；不绕过登录、验证码或反爬。DNS rebinding 仍属于平台网络层边界，不把网页内容当可信输入。
 - 外部请求只对网络错误、429、5xx 做有限重试；永久 4xx 不重试。
 - 日志按 JSON 输出，并递归遮盖 key 名中含 token、secret、authorization、api key 的字段。
 - Worker 模块顶层没有可变请求状态；异步工作全部 `await` 或交给 `waitUntil()`。

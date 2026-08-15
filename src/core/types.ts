@@ -5,7 +5,7 @@ export const PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
 export type ChannelName = "telegram" | "qq";
-export type MessageIntent = "create_item" | "query" | "analyze" | "help";
+export type MessageIntent = "create_item" | "query" | "analyze" | "help" | "clarify" | "unavailable";
 
 export interface Item {
   id: string;
@@ -79,16 +79,10 @@ export interface ParsedIntent {
   startAfter?: string | null;
   originalTimeExpression?: string | null;
   query?: ItemSearchFilters;
+  question?: string;
   confidence: number;
-  source: "deterministic" | "ai";
+  source: "system" | "ai";
   aiEnrichment?: Record<string, unknown>;
-}
-
-export interface ParsedTime {
-  at: string;
-  originalExpression: string;
-  confidence: "high" | "medium";
-  defaultedTime: boolean;
 }
 
 export interface CallbackAction {

@@ -115,10 +115,9 @@ export async function searchItems(db: D1Database, filters: ItemSearchFilters = {
     values.push(filters.createdFrom);
   }
   if (filters.keyword) {
-    clauses.push("(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR raw_message LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')");
-    const escaped = filters.keyword.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
-    const pattern = `%${escaped}%`;
-    values.push(pattern, pattern, pattern, pattern);
+    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0)");
+    const boundedKeyword = filters.keyword.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+    values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
   }
 
   const limit = Math.min(Math.max(filters.limit ?? 10, 1), 50);

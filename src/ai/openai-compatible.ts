@@ -31,9 +31,14 @@ export class OpenAICompatibleProvider implements AIProvider {
     const body: Record<string, unknown> = {
       model: this.config.aiModel,
       messages: request.messages,
-      temperature: request.temperature ?? 0.1,
-      max_tokens: Math.min(request.maxTokens ?? this.config.aiMaxTokens, this.config.aiMaxTokens),
     };
+    const maxTokens = Math.min(request.maxTokens ?? this.config.aiMaxTokens, this.config.aiMaxTokens);
+    if (usesModernTokenParameter(this.config.aiModel)) {
+      body.max_completion_tokens = maxTokens;
+    } else {
+      body.temperature = request.temperature ?? 0.1;
+      body.max_tokens = maxTokens;
+    }
     if (request.expectJson) body.response_format = { type: "json_object" };
 
     let lastError: Error | null = null;
@@ -41,7 +46,8 @@ export class OpenAICompatibleProvider implements AIProvider {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort("AI request timed out"), this.config.aiTimeoutMs);
       try {
-        const response = await this.fetcher(`${this.config.aiBaseUrl}/chat/completions`, {
+        const fetcher = this.fetcher;
+        const response = await fetcher(`${this.config.aiBaseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${this.apiKey}`,
@@ -52,7 +58,19 @@ export class OpenAICompatibleProvider implements AIProvider {
         });
         if (!response.ok) {
           const retryable = response.status === 429 || response.status >= 500;
-          throw new ProviderHttpError(response.status, retryable);
+          const details = await readResponseSnippet(response);
+          if (response.status === 400 && body.response_format && /response[_ ]?format|json[_ ]?object/i.test(details)) {
+            delete body.response_format;
+            lastError = new ProviderHttpError(response.status, true, details);
+            continue;
+          }
+          if (response.status === 400 && body.max_completion_tokens && /max[_ ]?completion[_ ]?tokens/i.test(details)) {
+            body.max_tokens = body.max_completion_tokens;
+            delete body.max_completion_tokens;
+            lastError = new ProviderHttpError(response.status, true, details);
+            continue;
+          }
+          throw new ProviderHttpError(response.status, retryable, details);
         }
         const payload: unknown = await response.json();
         const parsed = responseSchema.parse(payload);
@@ -79,10 +97,41 @@ export class OpenAICompatibleProvider implements AIProvider {
 }
 
 class ProviderHttpError extends Error {
-  public constructor(public readonly status: number, public readonly retryable: boolean) {
-    super(`AI provider returned HTTP ${status}`);
+  public constructor(public readonly status: number, public readonly retryable: boolean, details = "") {
+    super(`AI provider returned HTTP ${status}${details ? `: ${details}` : ""}`);
     this.name = "ProviderHttpError";
   }
+}
+
+function usesModernTokenParameter(model: string): boolean {
+  return /^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$)|codex(?:[.-]|$))/i.test(model);
+}
+
+async function readResponseSnippet(response: Response, maxBytes = 2_048): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      const remaining = maxBytes - total;
+      const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      if (value.byteLength > remaining) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes).replace(/\s+/g, " ").trim();
 }
 
 export function parseAIJson(text: string): unknown {

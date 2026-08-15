@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validatePublicHttpUrl } from "../src/security/ssrf";
 import { extractPageMetadata } from "../src/url/extract";
 import { fetchPage } from "../src/url/fetch";
+import { discoverUrls, readWebPage } from "../src/url/reader";
 
 describe("URL safety and extraction", () => {
   it.each([
@@ -58,5 +59,23 @@ describe("URL safety and extraction", () => {
   it("blocks redirects to private destinations", async () => {
     const fetcher: typeof fetch = async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } });
     await expect(fetchPage("https://example.com", { timeoutMs: 1_000, maxBytes: 1_000 }, fetcher)).rejects.toThrow("Private");
+  });
+
+  it("discovers card links and returns a bounded readable webpage", async () => {
+    expect(discoverUrls("分享卡片 https://example.com/post?id=1 ，备用 https://example.org/")).toEqual([
+      "https://example.com/post?id=1",
+      "https://example.org/",
+    ]);
+    const fetcher: typeof fetch = async () => new Response(
+      "<html><head><title>招聘信息</title></head><body><main>招募研究助理，周五截止。</main></body></html>",
+      { headers: { "content-type": "text/html" } },
+    );
+    const reading = await readWebPage("https://example.com/post", { urlFetchTimeoutMs: 1_000, urlMaxBytes: 20_000 }, fetcher);
+    expect(reading).toMatchObject({
+      title: "招聘信息",
+      source: "example.com",
+      truncated: false,
+    });
+    expect(reading.text).toContain("招募研究助理");
   });
 });
