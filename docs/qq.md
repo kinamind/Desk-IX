@@ -4,7 +4,7 @@ Composa 实现的是 QQ 开放平台 HTTP Webhook + C2C 私聊通道，包括官
 
 ## 1. 创建与授权
 
-1. 在 QQ 开放平台创建机器人，取得 `App ID`、`Bot Secret`、`Client Secret`。
+1. 在 QQ 开放平台创建机器人，取得 `App ID` 和 `AppSecret`。
 2. 开启单聊消息能力，并订阅 `C2C_MESSAGE_CREATE`。
 3. 如要使用按钮，订阅 `INTERACTION_CREATE` 并申请自定义 keyboard/消息交互权限。
 4. 确认机器人具备 C2C 主动消息授权。提醒和 Daily Plan 没有原消息 `msg_id`，会消耗/受限于平台的主动消息资格与频率规则。
@@ -13,7 +13,7 @@ QQ 权限和配额由开放平台控制；Composa 只做有限重试，不会绕
 
 ## 2. 配置 App 与 secrets
 
-在 `wrangler.jsonc` 设置：
+在 Cloudflare Dashboard 的 **Variables and secrets** 中设置：
 
 ```jsonc
 "QQ_APP_ID": "你的 App ID",
@@ -24,11 +24,10 @@ QQ 权限和配额由开放平台控制；Composa 只做有限重试，不会绕
 写入 Cloudflare secrets：
 
 ```bash
-npx wrangler secret put QQ_BOT_SECRET
-npx wrangler secret put QQ_CLIENT_SECRET
+npx wrangler secret put QQ_APP_SECRET
 ```
 
-`Bot Secret` 用于 Ed25519，不是 `Client Secret`；两者不要互换。
+QQ 后台只提供一个 `AppSecret`。Composa 同时用它完成 Ed25519 Webhook 签名和 App Access Token 获取；QQ token 接口请求体中的字段名虽然叫 `clientSecret`，值仍然就是这个 `AppSecret`。
 
 ## 3. 第一次取得自己的 `user_openid`
 
@@ -45,7 +44,7 @@ npx wrangler tail composa --format pretty
 4. 在经过 QQ 正式签名验证后的 `qq_user_not_allowlisted` JSON 日志中复制 `userId`。
 5. 立即把它写入 `QQ_ALLOWED_USER_OPENIDS` 并重新部署。
 
-空 allowlist 期间所有普通用户事件都会被拒绝；日志不会包含 Bot Secret、Client Secret 或 Access Token。
+空 allowlist 期间所有普通用户事件都会被拒绝；日志不会包含 AppSecret 或 Access Token。
 
 ## 4. 配置 Webhook
 
@@ -58,7 +57,7 @@ https://<worker-host>/webhooks/qq
 平台会发送 `op=13` 验证请求。Composa 会：
 
 1. 校验 `X-Bot-Appid`；
-2. 将 `Bot Secret` repeat 后截取 32-byte seed；
+2. 将 `AppSecret` repeat 后截取 32-byte seed；
 3. 对 `event_ts + plain_token` 做 Ed25519 签名；
 4. 返回十六进制 `signature`。
 
@@ -75,8 +74,8 @@ https://<worker-host>/webhooks/qq
 
 ## 常见问题
 
-- challenge 失败：确认回调指向当前 Worker、`QQ_APP_ID` 与 `QQ_BOT_SECRET` 属于同一个机器人。
+- challenge 失败：确认回调指向当前 Worker、`QQ_APP_ID` 与 `QQ_APP_SECRET` 属于同一个机器人。
 - 收到 403：查看 allowlist；不要把 QQ 号当作 `user_openid`。
 - 普通回复成功、定时提醒失败：通常是主动消息授权/配额，而不是 Workflow 时间问题。
 - 按钮不显示：申请 keyboard 权限；Composa 会退化为纯文本，仍可发自然语言操作。
-- `QQBot` token 错误：确认 `QQ_CLIENT_SECRET`；Access Token 由 Worker临时获取，不持久化、不记录日志。
+- `QQBot` token 错误：确认 `QQ_APP_SECRET`；Access Token 由 Worker 临时获取，不持久化、不记录日志。

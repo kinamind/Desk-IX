@@ -22,7 +22,7 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
         timezone: config.timezone,
         channels: {
           telegram: Boolean(env.TELEGRAM_BOT_TOKEN && config.telegramAllowedUserIds.size),
-          qq: Boolean(config.qqAppId && env.QQ_CLIENT_SECRET && config.qqAllowedUserOpenIds.size),
+          qq: Boolean(config.qqAppId && env.QQ_APP_SECRET && config.qqAllowedUserOpenIds.size),
         },
         ai: Boolean(env.AI_API_KEY),
       });

@@ -20,11 +20,13 @@ function qqRequest(body: string, signature: string, timestamp = "1725442341"): R
 
 describe("QQ adapter", () => {
   it("matches the official webhook challenge signature vector", async () => {
-    const adapter = new QQAdapter(testConfig(), officialChallengeSecret, "client");
+    const adapter = new QQAdapter(testConfig(), officialChallengeSecret);
     const body = JSON.stringify({ op: 13, d: { plain_token: "Arq0D5A61EgUu4OxUvOp", event_ts: "1725442341" } });
     const parsed = await adapter.parseWebhook(qqRequest(body, "unused"));
     expect(parsed.kind).toBe("challenge");
     if (parsed.kind !== "challenge") throw new Error("Expected challenge");
+    expect(parsed.response.status).toBe(200);
+    expect(parsed.response.headers.get("Content-Type")).toBe("application/json; charset=utf-8");
     await expect(parsed.response.json()).resolves.toEqual({
       plain_token: "Arq0D5A61EgUu4OxUvOp",
       signature: "87befc99c42c651b3aac0278e71ada338433ae26fcb24307bdc5ad38c1adc2d01bcfcadc0842edac85e85205028a1132afe09280305f13aa6909ffc2d652c706",
@@ -32,7 +34,7 @@ describe("QQ adapter", () => {
   });
 
   it("checks the app id before exposing the challenge signer", async () => {
-    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const adapter = new QQAdapter(testConfig(), officialSecret);
     const request = new Request("https://worker.test/webhooks/qq", {
       method: "POST",
       headers: { "X-Bot-Appid": "another-app" },
@@ -42,7 +44,7 @@ describe("QQ adapter", () => {
   });
 
   it("verifies and normalizes a C2C message", async () => {
-    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const adapter = new QQAdapter(testConfig(), officialSecret);
     const body = JSON.stringify({
       id: "event-1",
       op: 0,
@@ -68,7 +70,7 @@ describe("QQ adapter", () => {
   });
 
   it("rejects a tampered body", async () => {
-    const adapter = new QQAdapter(testConfig(), officialSecret, "client");
+    const adapter = new QQAdapter(testConfig(), officialSecret);
     const valid = JSON.stringify({ op: 0, t: "UNKNOWN", d: {} });
     const signature = adapter.signChallenge("1725442341", valid);
     const tampered = JSON.stringify({ op: 0, t: "OTHER", d: {} });
@@ -87,12 +89,12 @@ describe("QQ adapter", () => {
       if (url.endsWith("/app/getAppAccessToken")) return Response.json({ access_token: "access", expires_in: "7200" });
       return Response.json({ id: "qq-reply-1", timestamp: "2026-08-15T02:00:01.000Z" });
     };
-    const adapter = new QQAdapter(testConfig(), officialSecret, "client", fetcher);
+    const adapter = new QQAdapter(testConfig(), officialSecret, fetcher);
     const receipt = await adapter.send({ channel: "qq", userId: "qq-user-42" }, {
       text: "提醒",
       buttons: [[{ label: "完成", action: "done:item-1", style: "primary" }]],
     });
-    expect(calls[0]).toMatchObject({ body: { appId: "test-app", clientSecret: "client" }, authorization: null });
+    expect(calls[0]).toMatchObject({ body: { appId: "test-app", clientSecret: officialSecret }, authorization: null });
     expect(calls[1]).toMatchObject({
       url: "https://api.bot.qq.com/v2/users/qq-user-42/messages",
       authorization: "QQBot access",
@@ -112,7 +114,7 @@ describe("QQ adapter", () => {
       if (messageBodies.length === 1) return new Response("keyboard denied", { status: 403 });
       return Response.json({ id: "plain-reply" });
     };
-    const adapter = new QQAdapter(testConfig(), officialSecret, "client", fetcher);
+    const adapter = new QQAdapter(testConfig(), officialSecret, fetcher);
     await expect(adapter.send({ channel: "qq", userId: "qq-user-42" }, {
       text: "提醒",
       buttons: [[{ label: "完成", action: "done:item-1" }]],

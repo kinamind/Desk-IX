@@ -49,23 +49,24 @@ function parseTargets(value: string): ChannelTarget[] {
 }
 
 export function getConfig(env: Env): RuntimeConfig {
+  const aiBaseUrl = env.AI_BASE_URL || "https://api.openai.com/v1";
   return configSchema.parse({
     appName: env.APP_NAME,
     locale: env.APP_LOCALE,
     timezone: env.TIMEZONE,
     dailyPlanTime: env.DAILY_PLAN_TIME,
-    aiBaseUrl: env.AI_BASE_URL.replace(/\/$/, ""),
-    aiModel: env.AI_MODEL,
+    aiBaseUrl: aiBaseUrl.replace(/\/$/, ""),
+    aiModel: env.AI_MODEL || "gpt-4.1-mini",
     aiEmbeddingModel: env.AI_EMBEDDING_MODEL,
     aiMaxTokens: parseInteger(env.AI_MAX_TOKENS, 600),
     aiTimeoutMs: parseInteger(env.AI_TIMEOUT_MS, 15_000),
     aiDailyRequestLimit: parseInteger(env.AI_DAILY_REQUEST_LIMIT, 100),
     urlFetchTimeoutMs: parseInteger(env.URL_FETCH_TIMEOUT_MS, 6_000),
     urlMaxBytes: parseInteger(env.URL_MAX_BYTES, 524_288),
-    telegramAllowedUserIds: csvSet(env.TELEGRAM_ALLOWED_USER_IDS),
-    qqAllowedUserOpenIds: csvSet(env.QQ_ALLOWED_USER_OPENIDS),
-    dailyPlanTargets: parseTargets(env.DAILY_PLAN_TARGETS),
-    qqAppId: env.QQ_APP_ID,
+    telegramAllowedUserIds: csvSet(env.TELEGRAM_ALLOWED_USER_IDS || ""),
+    qqAllowedUserOpenIds: csvSet(env.QQ_ALLOWED_USER_OPENIDS || ""),
+    dailyPlanTargets: parseTargets(env.DAILY_PLAN_TARGETS || ""),
+    qqAppId: env.QQ_APP_ID || "",
     qqApiBaseUrl: env.QQ_API_BASE_URL.replace(/\/$/, ""),
   });
 }

@@ -36,7 +36,7 @@ const tokenSchema = z.object({ access_token: z.string(), expires_in: z.union([z.
 const sendSchema = z.object({ id: z.string(), timestamp: z.string().optional() });
 
 function deriveKeyPair(secret: string): nacl.SignKeyPair {
-  if (!secret) throw new Error("QQ_BOT_SECRET is not configured");
+  if (!secret) throw new Error("QQ_APP_SECRET is not configured");
   let seedText = secret;
   while (new TextEncoder().encode(seedText).byteLength < 32) seedText += seedText;
   const seed = new TextEncoder().encode(seedText).slice(0, 32);
@@ -66,8 +66,7 @@ function messageIndex(ext: string[] | undefined): string | null {
 export class QQAdapter implements ChannelAdapter {
   public constructor(
     private readonly config: RuntimeConfig,
-    private readonly botSecret: string,
-    private readonly clientSecret: string,
+    private readonly appSecret: string,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
 
@@ -80,8 +79,15 @@ export class QQAdapter implements ChannelAdapter {
 
     if (payload.op === 13) {
       const challenge = challengeSchema.parse(payload.d);
-      const signature = this.signChallenge(challenge.event_ts, challenge.plain_token);
-      return { kind: "challenge", response: Response.json({ plain_token: challenge.plain_token, signature }) };
+      const responseSignature = this.signChallenge(challenge.event_ts, challenge.plain_token);
+      const responseBody = JSON.stringify({ plain_token: challenge.plain_token, signature: responseSignature });
+      return {
+        kind: "challenge",
+        response: new Response(responseBody, {
+          status: 200,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        }),
+      };
     }
 
     if (!this.verifyRequest(
@@ -144,14 +150,14 @@ export class QQAdapter implements ChannelAdapter {
   }
 
   public signChallenge(eventTimestamp: string, plainToken: string): string {
-    const signature = nacl.sign.detached(concatBytes(eventTimestamp, plainToken), deriveKeyPair(this.botSecret).secretKey);
+    const signature = nacl.sign.detached(concatBytes(eventTimestamp, plainToken), deriveKeyPair(this.appSecret).secretKey);
     return bytesToHex(signature);
   }
 
   public verifyRequest(timestamp: string, rawBody: string, signatureHex: string): boolean {
     const signature = hexToBytes(signatureHex);
-    if (!timestamp || !signature || signature.byteLength !== nacl.sign.signatureLength) return false;
-    return nacl.sign.detached.verify(concatBytes(timestamp, rawBody), signature, deriveKeyPair(this.botSecret).publicKey);
+    if (!this.appSecret || !timestamp || !signature || signature.byteLength !== nacl.sign.signatureLength) return false;
+    return nacl.sign.detached.verify(concatBytes(timestamp, rawBody), signature, deriveKeyPair(this.appSecret).publicKey);
   }
 
   public async send(target: ChannelTarget, message: OutgoingMessage): Promise<DeliveryReceipt> {
@@ -216,11 +222,11 @@ export class QQAdapter implements ChannelAdapter {
   }
 
   private async getAccessToken(): Promise<string> {
-    if (!this.config.qqAppId || !this.clientSecret) throw new Error("QQ_APP_ID/QQ_CLIENT_SECRET is not configured");
+    if (!this.config.qqAppId || !this.appSecret) throw new Error("QQ_APP_ID/QQ_APP_SECRET is not configured");
     const response = await fetchWithRetry(this.fetcher, `${this.config.qqApiBaseUrl}/app/getAppAccessToken`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appId: this.config.qqAppId, clientSecret: this.clientSecret }),
+      body: JSON.stringify({ appId: this.config.qqAppId, clientSecret: this.appSecret }),
     });
     return tokenSchema.parse(await response.json()).access_token;
   }

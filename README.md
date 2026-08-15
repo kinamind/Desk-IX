@@ -70,7 +70,7 @@ curl http://127.0.0.1:8787/health
 
 ## 配置
 
-非敏感变量在 `wrangler.jsonc` 的 `vars` 中维护：
+非敏感变量可在 Cloudflare Dashboard 的 **Variables and secrets** 中维护；项目开启了 `keep_vars`，后续部署会保留面板值。未设置时使用下列默认值：
 
 | 变量 | 默认值 | 用途 |
 |---|---:|---|
@@ -97,8 +97,7 @@ curl http://127.0.0.1:8787/health
 | `AI_API_KEY` | AI Provider；留空即完全禁用 AI |
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot API |
 | `TELEGRAM_WEBHOOK_SECRET` | Telegram webhook header 校验 |
-| `QQ_BOT_SECRET` | QQ Ed25519 webhook 验签/挑战签名 |
-| `QQ_CLIENT_SECRET` | 获取 QQ App Access Token |
+| `QQ_APP_SECRET` | QQ 开放平台 AppSecret；用于 Webhook 签名与获取 App Access Token |
 | `ADMIN_API_TOKEN` | `/api/*` Bearer token |
 
 仓库不会提交 `.dev.vars`、`.env*`、备份文件或真实 credential。

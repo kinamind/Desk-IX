@@ -14,7 +14,7 @@ Secret 只能使用 Telegram 接受的 `A-Z a-z 0-9 _ -` 字符；十六进制�
 
 ## 2. 配置 Composa
 
-在 `wrangler.jsonc` 设置：
+在 Cloudflare Dashboard 的 **Variables and secrets** 中设置：
 
 ```jsonc
 "TELEGRAM_ALLOWED_USER_IDS": "123456789",
@@ -30,7 +30,7 @@ npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
 
-每条命令会安全提示输入；不要把真实值写进 `wrangler.jsonc` 或提交到 Git。
+每条命令会安全提示输入；不要把真实值写进仓库或提交到 Git。
 
 ## 3. 设置 webhook
 
