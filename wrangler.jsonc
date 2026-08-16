@@ -10,6 +10,10 @@
     {
       "pattern": "desk.kinamind.org",
       "custom_domain": true
+    },
+    {
+      "pattern": "kinamind.org/desk/*",
+      "zone_name": "kinamind.org"
     }
   ],
   "vars": {
