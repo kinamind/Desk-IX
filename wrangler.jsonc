@@ -10,6 +10,10 @@
     {
       "pattern": "desk-ix.kinamind.org",
       "custom_domain": true
+    },
+    {
+      "pattern": "qq.desk-ix.kinamind.org",
+      "custom_domain": true
     }
   ],
   "vars": {
