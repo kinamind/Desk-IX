@@ -1,9 +1,9 @@
-const baseUrl = process.env.COMPOSA_URL?.replace(/\/$/, "");
+const baseUrl = (process.env.DESK_IX_URL ?? process.env.COMPOSA_URL)?.replace(/\/$/, "");
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
 if (!baseUrl || !botToken || !webhookSecret) {
-  console.error("Missing COMPOSA_URL, TELEGRAM_BOT_TOKEN, or TELEGRAM_WEBHOOK_SECRET.");
+  console.error("Missing DESK_IX_URL, TELEGRAM_BOT_TOKEN, or TELEGRAM_WEBHOOK_SECRET.");
   process.exitCode = 1;
 } else {
   const webhookUrl = `${baseUrl}/webhooks/telegram`;

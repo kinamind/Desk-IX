@@ -1,6 +1,6 @@
-const baseUrl = process.env.COMPOSA_URL?.replace(/\/$/, "");
+const baseUrl = (process.env.DESK_IX_URL ?? process.env.COMPOSA_URL)?.replace(/\/$/, "");
 if (!baseUrl) {
-  console.error("Missing COMPOSA_URL, for example https://composa.<account>.workers.dev");
+  console.error("Missing DESK_IX_URL, for example https://desk-ix.kinamind.org");
   process.exitCode = 1;
 } else {
   const healthResponse = await fetch(`${baseUrl}/health`);

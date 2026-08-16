@@ -8,12 +8,12 @@
   "keep_vars": true,
   "routes": [
     {
-      "pattern": "composa.kinamind.org",
+      "pattern": "desk-ix.kinamind.org",
       "custom_domain": true
     }
   ],
   "vars": {
-    "APP_NAME": "Composa",
+    "APP_NAME": "Desk-IX",
     "APP_LOCALE": "zh-CN",
     "TIMEZONE": "Asia/Singapore",
     "DAILY_PLAN_TIME": "08:00",

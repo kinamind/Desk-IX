@@ -1,6 +1,6 @@
 import { action } from "@cloudflare/think";
 import { z } from "zod";
-import { ITEM_TYPES, PRIORITIES } from "../../core/types";
+import { CHRONOTYPES, ITEM_TYPES, PRIORITIES, type UserProfileUpdate } from "../../core/types";
 import { scheduleReminder } from "../../core/reminder-service";
 import {
   archiveItem,
@@ -15,6 +15,8 @@ import {
 import { cancelOpenReminders } from "../../db/reminders";
 import { listScheduleWindows } from "../../db/schedule";
 import { clearPendingAction } from "../../db/pending-actions";
+import { ensureUserProfile, isValidTimezone, updateUserProfile } from "../../db/user-profiles";
+import { getConfig } from "../../config";
 import type { AgentPrincipal } from "../context";
 import { stableFingerprint } from "../idempotency";
 
@@ -61,6 +63,33 @@ const transitionSchema = z.object({
   itemId: z.string().uuid(),
   transition: z.enum(["complete", "abandon", "archive", "restore"]),
 });
+
+const clockSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/);
+const preferenceValueSchema = z.union([
+  z.string().max(500),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string().max(200)).max(20),
+]);
+
+export const profileUpdateSchema = z.object({
+  userCallName: z.string().trim().max(80).nullable().optional(),
+  assistantCallName: z.string().trim().min(1).max(80).optional(),
+  timezone: z.string().trim().min(1).max(100).refine(isValidTimezone, "Invalid IANA timezone").optional(),
+  locale: z.string().trim().min(2).max(40).optional(),
+  dailyPlanEnabled: z.boolean().optional(),
+  dailyPlanTime: clockSchema.optional(),
+  chronotype: z.enum(CHRONOTYPES).optional(),
+  targetWakeTime: clockSchema.nullable().optional(),
+  targetSleepTime: clockSchema.nullable().optional(),
+  routineCoaching: z.boolean().optional(),
+  communicationStyle: z.string().trim().min(1).max(500).optional(),
+  preferences: z.record(z.string().trim().min(1).max(80), preferenceValueSchema).refine(
+    (value) => Object.keys(value).length <= 30,
+    "Too many profile preferences",
+  ).optional(),
+}).refine((input) => Object.keys(input).length > 0, "Provide at least one profile field to update");
 
 export const reminderInputSchema = z.object({
   operation: z.enum(["set", "reschedule", "cancel"]),
@@ -225,6 +254,35 @@ export async function manageOwnedReminder(
   };
 }
 
+export async function updateOwnedProfile(
+  env: Env,
+  principal: AgentPrincipal,
+  input: z.infer<typeof profileUpdateSchema>,
+) {
+  const config = getConfig(env);
+  await ensureUserProfile(env.DB, principal.channel, principal.userId, {
+    timezone: config.timezone,
+    locale: config.locale,
+    dailyPlanTime: config.dailyPlanTime,
+  });
+  const update: UserProfileUpdate = {
+    ...(input.userCallName !== undefined ? { userCallName: input.userCallName } : {}),
+    ...(input.assistantCallName !== undefined ? { assistantCallName: input.assistantCallName } : {}),
+    ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
+    ...(input.locale !== undefined ? { locale: input.locale } : {}),
+    ...(input.dailyPlanEnabled !== undefined ? { dailyPlanEnabled: input.dailyPlanEnabled } : {}),
+    ...(input.dailyPlanTime !== undefined ? { dailyPlanTime: input.dailyPlanTime } : {}),
+    ...(input.chronotype !== undefined ? { chronotype: input.chronotype } : {}),
+    ...(input.targetWakeTime !== undefined ? { targetWakeTime: input.targetWakeTime } : {}),
+    ...(input.targetSleepTime !== undefined ? { targetSleepTime: input.targetSleepTime } : {}),
+    ...(input.routineCoaching !== undefined ? { routineCoaching: input.routineCoaching } : {}),
+    ...(input.communicationStyle !== undefined ? { communicationStyle: input.communicationStyle } : {}),
+    ...(input.preferences !== undefined ? { preferences: input.preferences } : {}),
+  };
+  const profile = await updateUserProfile(env.DB, principal.channel, principal.userId, update);
+  return { updated: true, profile };
+}
+
 export function createWriteActions(env: Env, principal: PrincipalProvider) {
   return {
     item_create: action({
@@ -254,6 +312,13 @@ export function createWriteActions(env: Env, principal: PrincipalProvider) {
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
       execute: (input) => manageOwnedReminder(env, principal(), input),
+    }),
+    profile_update: action({
+      description: "Update this user's persistent assistant relationship and planning preferences when the user states them or asks you to choose a safe, reversible default. Use for mutual forms of address, IANA timezone, daily-plan subscription/time, chronotype, explicit sleep/wake goals, routine coaching, and communication style. Never infer sensitive personal attributes.",
+      inputSchema: profileUpdateSchema,
+      permissions: ["profile:write"],
+      idempotencyKey: ({ input }) => `profile:${principal().eventId}:${stableFingerprint(input)}`,
+      execute: (input) => updateOwnedProfile(env, principal(), input),
     }),
   };
 }

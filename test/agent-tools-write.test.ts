@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import type { AgentPrincipal } from "../src/agent/context";
-import { manageOwnedReminder, transitionOwnedItem, updateOwnedItem } from "../src/agent/tools/write";
+import { manageOwnedReminder, transitionOwnedItem, updateOwnedItem, updateOwnedProfile } from "../src/agent/tools/write";
 import { createItem, getItem } from "../src/db/items";
+import { ensureUserProfile, getUserProfile } from "../src/db/user-profiles";
 
 const principal: AgentPrincipal = {
   channel: "qq",
@@ -12,6 +13,38 @@ const principal: AgentPrincipal = {
 };
 
 describe("agent write capabilities", () => {
+  it("updates only the authenticated user's persistent assistant profile", async () => {
+    await ensureUserProfile(env.DB, principal.channel, principal.userId, {
+      timezone: "Asia/Singapore",
+      locale: "zh-CN",
+      dailyPlanTime: "08:00",
+    });
+    await ensureUserProfile(env.DB, principal.channel, "someone-else", {
+      timezone: "UTC",
+      locale: "zh-CN",
+      dailyPlanTime: "08:00",
+    });
+
+    const updated = await updateOwnedProfile(env, principal, {
+      assistantCallName: "小九",
+      dailyPlanTime: "11:00",
+      chronotype: "late",
+      routineCoaching: true,
+      preferences: { planningDensity: "light" },
+    });
+
+    expect(updated.profile).toMatchObject({
+      assistantCallName: "小九",
+      dailyPlanTime: "11:00",
+      chronotype: "late",
+      routineCoaching: true,
+    });
+    await expect(getUserProfile(env.DB, principal.channel, "someone-else")).resolves.toMatchObject({
+      timezone: "UTC",
+      assistantCallName: "拾序",
+    });
+  });
+
   it("enriches the same recruitment item with structured facts and provenance", async () => {
     const item = await createItem(env.DB, {
       type: "resource",

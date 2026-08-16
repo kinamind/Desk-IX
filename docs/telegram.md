@@ -12,13 +12,12 @@ openssl rand -hex 32
 
 Secret 只能使用 Telegram 接受的 `A-Z a-z 0-9 _ -` 字符；十六进制满足要求。
 
-## 2. 配置 Composa
+## 2. 配置 Desk-IX
 
 在 Cloudflare Dashboard 的 **Variables and secrets** 中设置：
 
 ```jsonc
-"TELEGRAM_ALLOWED_USER_IDS": "123456789",
-"DAILY_PLAN_TARGETS": "telegram:123456789"
+"TELEGRAM_ALLOWED_USER_IDS": "123456789"
 ```
 
 多个个人账号用逗号分隔。不要加入陌生 user ID。
@@ -37,13 +36,13 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 Webhook 地址是：
 
 ```text
-https://<worker-host>/webhooks/telegram
+https://desk-ix.kinamind.org/webhooks/telegram
 ```
 
 脚本从环境变量读取 token/secret，不会把它们打印到输出。为避免 shell history 留下明文，可交互读取：
 
 ```bash
-export COMPOSA_URL="https://<worker-host>"
+export DESK_IX_URL="https://desk-ix.kinamind.org"
 read -s TELEGRAM_BOT_TOKEN && export TELEGRAM_BOT_TOKEN
 read -s TELEGRAM_WEBHOOK_SECRET && export TELEGRAM_WEBHOOK_SECRET
 npm run telegram:webhook
@@ -66,7 +65,7 @@ curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
 ```text
 想到一个 idea：研究 Agent communication 与团队 mind flow
-2 小时后提醒我测试 Composa
+2 小时后提醒我测试 Desk-IX
 我最近有哪些 research ideas？
 ```
 

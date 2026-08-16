@@ -4,6 +4,7 @@ import { getConfig } from "../../config";
 import type { Item, ScheduleWindow } from "../../core/types";
 import { getOwnedItem, listOwnedItemReminders, searchOwnedItemsNatural } from "../../db/items";
 import { listScheduleWindows } from "../../db/schedule";
+import { ensureUserProfile, getUserProfile } from "../../db/user-profiles";
 import { discoverUrls, readWebPagesFromText } from "../../url/reader";
 import type { AgentPrincipal } from "../context";
 
@@ -96,6 +97,11 @@ export async function loadSchedule(
   input: { from?: string | undefined; horizonDays?: number | undefined },
 ): Promise<{ timezone: string; windows: ScheduleWindow[] }> {
   const config = getConfig(env);
+  const profile = await ensureUserProfile(env.DB, principal.channel, principal.userId, {
+    timezone: config.timezone,
+    locale: config.locale,
+    dailyPlanTime: config.dailyPlanTime,
+  });
   const from = input.from ? new Date(input.from) : new Date();
   if (Number.isNaN(from.getTime())) throw new Error("Invalid schedule start time");
   const windows = await listScheduleWindows(
@@ -105,7 +111,17 @@ export async function loadSchedule(
     from,
     input.horizonDays ?? 14,
   );
-  return { timezone: config.timezone, windows };
+  return { timezone: profile.timezone, windows };
+}
+
+export async function loadOwnedProfile(env: Env, principal: AgentPrincipal) {
+  const config = getConfig(env);
+  return getUserProfile(env.DB, principal.channel, principal.userId)
+    ?? ensureUserProfile(env.DB, principal.channel, principal.userId, {
+      timezone: config.timezone,
+      locale: config.locale,
+      dailyPlanTime: config.dailyPlanTime,
+    });
 }
 
 export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet {
@@ -138,6 +154,11 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
         horizonDays: z.number().int().min(1).max(30).default(14),
       }),
       execute: (input) => loadSchedule(env, principal(), input),
+    }),
+    profile_get: tool({
+      description: "Read this user's persistent forms of address, timezone, daily-plan subscription and time, chronotype, optional sleep goals, coaching preference, communication style, and other planning preferences.",
+      inputSchema: z.object({}),
+      execute: () => loadOwnedProfile(env, principal()),
     }),
   };
 }

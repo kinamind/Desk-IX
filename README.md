@@ -1,9 +1,9 @@
-# Composa（拾序）
+# Desk-IX（拾序）
 
-> Compose what matters. Find your order.
+> Pronounced **desk nine**.
 > 拾起零碎，归之有序。
 
-Composa 来自 **compose + persona**。它是一个长期待在聊天工具里的轻量个人 Agent：每个用户拥有一条持久、串行的会话，模型可以在同一轮里反复读取记忆、网页与日程，再调用受控工具完成任务。
+Desk-IX 是一个长期待在聊天工具里的轻量个人 Agent：每个用户拥有一条持久、串行的会话和个人档案，模型可以在同一轮里反复读取记忆、网页、日程与偏好，再调用受控工具完成任务。
 
 它刻意不是一个会任意操作电脑、浏览器或 shell 的通用自主 Agent，但保留了 Agent 最重要的观察、推理、工具执行和持久记忆闭环。核心链路是：
 
@@ -18,12 +18,13 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 - 每个 `channel + user` 一条 Durable Object 会话；消息串行、调用可恢复、写操作有幂等键，平台重复投递不会重复执行
 - 自然语言完成、舍弃、恢复和修改已有事项；支持一句话执行多个动作，状态变化不会复制出新待办
 - D1 保存事项、提醒和审计事实，Durable Object 保存 Agent 会话与投递状态；保留用户原文与 AI enrichment 的边界
+- 持久个人档案：可在对话中设置相互称呼、IANA 时区、每日安排时间、作息类型、睡眠目标、辅导开关和沟通风格
 - AI-first 自然语言理解：中文数字、口语时间、指代、事项时间与提醒时间由模型统一解释
 - 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
-- 新建或改动提醒时读取该用户在 Composa 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
+- 新建或改动提醒时读取该用户在 Desk-IX 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
 - Cloudflare Workflows 一次性提醒；提醒策略由模型根据事项语义和期限决定，不按项目类型硬塞固定里程碑
-- Cron 驱动、D1 事实驱动的简洁 Daily Plan
+- Cron 驱动、D1 事实驱动的个性化 Daily Plan；按每位用户自己的时区和偏好时间发送，并避开已有日程
 - `完成`、`舍弃`、`稍后`、`改期`、`详情` 交互按钮；舍弃只归档，可随时恢复
 - OpenAI-compatible API，可关闭、可限额、没有未经配置的付费 fallback
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
@@ -41,7 +42,7 @@ flowchart LR
   QQ["QQ Bot"] --> WH
   WH --> DO["Per-user Durable Agent Session"]
   DO --> AI["Native Model / Tool Loop"]
-  AI --> TOOLS["8 Scoped Composa Tools"]
+  AI --> TOOLS["10 Scoped Desk-IX Tools"]
   TOOLS --> AI
   TOOLS --> D1[("D1 Domain Memory")]
   TOOLS --> WEB["Bounded Web Reader"]
@@ -89,9 +90,9 @@ curl http://127.0.0.1:8787/health
 
 | 变量 | 默认值 | 用途 |
 |---|---:|---|
-| `TIMEZONE` | `Asia/Singapore` | 时间解析与 Daily Plan 时区 |
-| `DAILY_PLAN_TIME` | `08:00` | 当地每日计划时间；Cron 在其后的首个 15 分钟刻度发送 |
-| `DAILY_PLAN_TARGETS` | 空 | 如 `telegram:123456,qq:OPENID` |
+| `TIMEZONE` | `Asia/Singapore` | 新用户档案的默认时区 |
+| `DAILY_PLAN_TIME` | `08:00` | 新用户档案的默认每日安排时间 |
+| `DAILY_PLAN_TARGETS` | 空 | 旧部署兼容入口；新用户由个人档案自动订阅，无需配置 |
 | `AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 根地址 |
 | `AI_MODEL` | `gpt-4.1-mini` | 支持 OpenAI tool calls 的模型名 |
 | `AI_EMBEDDING_MODEL` | 空 | 第二阶段预留，MVP 不使用 |
@@ -138,7 +139,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1/Durable Object 中，覆盖原生多步工具循环、会话运行时约束、记忆检索、网页读取、原记录更新、完成/舍弃/恢复、提醒避让、用户隔离、重复 webhook、Workflow、callback、时区、Telegram/QQ 授权、QQ 卡片 URL 与 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1/Durable Object 中，覆盖原生多步工具循环、会话运行时约束、个人档案、记忆检索、网页读取、原记录更新、完成/舍弃/恢复、提醒避让、用户隔离、重复 webhook、Workflow、callback、每用户时区、Telegram/QQ 授权、QQ 卡片 URL 与 Daily Plan。
 
 ## 项目结构
 
@@ -161,4 +162,4 @@ scripts/          webhook、smoke test、备份脚本
 
 ## MVP 边界
 
-当前的“日程”来自 Composa 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`，事项与提醒继续以 D1 为业务事实源。Composa 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。
+当前的“日程”来自 Desk-IX 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。个人档案、事项与提醒均以 D1 为业务事实源。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`。Desk-IX 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。

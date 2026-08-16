@@ -12,7 +12,7 @@ describe("HTTP router", () => {
     const body = await response.json<Record<string, unknown>>();
     expect(body).toMatchObject({
       ok: true,
-      service: "Composa",
+      service: "Desk-IX",
       channels: { telegram: true, qq: true },
       ai: { configured: false, verified: false },
     });

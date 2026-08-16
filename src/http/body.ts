@@ -12,7 +12,7 @@ export async function readBoundedText(request: Request, maxBytes: number): Promi
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel("Composa request size limit reached");
+        await reader.cancel("Desk-IX request size limit reached");
         throw new BodyTooLargeError(maxBytes);
       }
       chunks.push(value);

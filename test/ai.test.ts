@@ -132,7 +132,7 @@ describe("Agent model provider contract", () => {
 
 function agentModelEnv(): Env {
   return {
-    APP_NAME: "Composa",
+    APP_NAME: "Desk-IX",
     APP_LOCALE: "zh-CN",
     TIMEZONE: "Asia/Singapore",
     DAILY_PLAN_TIME: "08:00",

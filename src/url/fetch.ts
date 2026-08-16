@@ -30,7 +30,7 @@ export async function fetchPage(
         redirect: "manual",
         headers: {
           "Accept": "text/html, text/plain;q=0.9",
-          "User-Agent": "Composa/0.1 (+personal knowledge agent)",
+          "User-Agent": "Desk-IX/0.1 (+personal agent)",
         },
         signal: controller.signal,
       });
@@ -72,7 +72,7 @@ async function readLimitedText(body: ReadableStream<Uint8Array> | null, maxBytes
         chunks.push(value.slice(0, maxBytes - total));
         total = maxBytes;
         truncated = true;
-        await reader.cancel("Composa size limit reached");
+        await reader.cancel("Desk-IX size limit reached");
         break;
       }
       chunks.push(value);

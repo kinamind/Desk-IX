@@ -1,8 +1,8 @@
 {
-  "name": "composa",
+  "name": "desk-ix",
   "version": "0.1.0",
   "private": true,
-  "description": "Composa（拾序）— Compose what matters. Find your order.",
+  "description": "Desk-IX（拾序）— a lightweight personal agent, pronounced desk nine.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
