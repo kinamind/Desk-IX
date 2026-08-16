@@ -94,6 +94,45 @@ describe("QQ adapter", () => {
     expect(parsed.message.text).toContain("https://example.com/jobs/ra");
   });
 
+  it("preserves the quoted message body for QQ reference messages", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret);
+    const body = JSON.stringify({
+      id: "event-reference",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-reference",
+        author: { user_openid: "qq-user-42" },
+        content: "这个还没完成，明天继续提醒我",
+        timestamp: "2026-08-17T02:00:00.000Z",
+        message_type: 103,
+        message_scene: {
+          ext: ["ref_msg_idx=reference-reminder", "msg_idx=current-message"],
+        },
+        msg_elements: [
+          {
+            msg_idx: "reference-reminder",
+            message_type: 0,
+            content: "🔔 找人帮忙转发 ResWork 实验招募被试",
+          },
+        ],
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    const parsed = await adapter.parseWebhook(qqRequest(body, signature));
+
+    expect(parsed).toMatchObject({ kind: "message" });
+    if (parsed.kind !== "message") throw new Error("Expected message");
+    expect(parsed.message.text).toBe([
+      "[引用消息]",
+      "🔔 找人帮忙转发 ResWork 实验招募被试",
+      "[/引用消息]",
+      "[当前消息]",
+      "这个还没完成，明天继续提醒我",
+    ].join("\n"));
+    expect(parsed.message.eventId).toBe("c2c:message-reference:current-message");
+  });
+
   it("rejects a tampered body", async () => {
     const adapter = new QQAdapter(testConfig(), officialSecret);
     const valid = JSON.stringify({ op: 0, t: "UNKNOWN", d: {} });

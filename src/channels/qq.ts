@@ -20,9 +20,11 @@ const c2cSchema = z.object({
   author: z.object({ id: z.string().optional(), user_openid: z.string().optional() }),
   content: z.string().default(""),
   timestamp: z.string(),
+  message_type: z.number().int().optional(),
   message_scene: z.object({ ext: z.array(z.string()).optional() }).optional(),
   attachments: z.array(z.object({ url: z.string().url().optional(), asr_refer_text: z.string().optional() })).optional(),
   ark_data: z.object({ prompt: z.string().optional(), fields: z.record(z.string(), z.unknown()).optional() }).optional(),
+  msg_elements: z.array(z.unknown()).max(100).optional(),
 });
 const interactionSchema = z.object({
   id: z.string(),
@@ -63,6 +65,11 @@ function messageIndex(ext: string[] | undefined): string | null {
   return entry ? entry.slice("msg_idx=".length) : null;
 }
 
+function referencedMessageIndex(ext: string[] | undefined): string | null {
+  const entry = ext?.find((value) => value.startsWith("ref_msg_idx="));
+  return entry ? entry.slice("ref_msg_idx=".length) : null;
+}
+
 function cardFieldText(fields: Record<string, unknown> | undefined, maxChars = 8_000): string {
   if (!fields) return "";
   const values: string[] = [];
@@ -85,6 +92,56 @@ function cardFieldText(fields: Record<string, unknown> | undefined, maxChars = 8
   };
   visit(fields, 0);
   return values.join("\n").slice(0, maxChars);
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function messageElementText(value: unknown, depth = 0): string[] {
+  if (depth > 4) return [];
+  const element = objectValue(value);
+  if (!element) return [];
+  const parts: string[] = [];
+  if (typeof element.content === "string" && element.content.trim()) parts.push(element.content.trim());
+
+  const ark = objectValue(element.ark_data);
+  if (ark) {
+    if (typeof ark.prompt === "string" && ark.prompt.trim()) parts.push(ark.prompt.trim());
+    const fields = objectValue(ark.fields);
+    const fieldText = cardFieldText(fields ?? undefined);
+    if (fieldText) parts.push(fieldText);
+  }
+
+  if (Array.isArray(element.attachments)) {
+    for (const attachmentValue of element.attachments.slice(0, 20)) {
+      const attachment = objectValue(attachmentValue);
+      if (!attachment) continue;
+      if (typeof attachment.asr_refer_text === "string" && attachment.asr_refer_text.trim()) {
+        parts.push(attachment.asr_refer_text.trim());
+      } else if (typeof attachment.url === "string" && attachment.url.trim()) {
+        parts.push(attachment.url.trim());
+      }
+    }
+  }
+
+  if (Array.isArray(element.msg_elements)) {
+    for (const nested of element.msg_elements.slice(0, 50)) parts.push(...messageElementText(nested, depth + 1));
+  }
+  return parts;
+}
+
+function referencedMessageText(elements: unknown[] | undefined, ext: string[] | undefined): string {
+  if (!elements?.length) return "";
+  const targetIndex = referencedMessageIndex(ext);
+  const matching = targetIndex
+    ? elements.filter((value) => objectValue(value)?.msg_idx === targetIndex)
+    : [];
+  const selected = matching.length > 0 ? matching : elements;
+  const unique = Array.from(new Set(selected.flatMap((value) => messageElementText(value)).filter(Boolean)));
+  return unique.join("\n").slice(0, 8_000);
 }
 
 export class QQAdapter implements ChannelAdapter {
@@ -132,7 +189,13 @@ export class QQAdapter implements ChannelAdapter {
       const index = messageIndex(data.message_scene?.ext);
       const attachmentText = data.attachments?.map((attachment) => attachment.asr_refer_text ?? attachment.url ?? "").filter(Boolean).join("\n") ?? "";
       const cardText = [data.ark_data?.prompt ?? "", cardFieldText(data.ark_data?.fields)].filter(Boolean).join("\n");
-      const fullText = [data.content, cardText, attachmentText].filter(Boolean).join("\n").trim();
+      const currentText = [data.content, cardText, attachmentText].filter(Boolean).join("\n").trim();
+      const referenceText = data.message_type === 103 || referencedMessageIndex(data.message_scene?.ext)
+        ? referencedMessageText(data.msg_elements, data.message_scene?.ext)
+        : "";
+      const fullText = referenceText
+        ? ["[引用消息]", referenceText, "[/引用消息]", "[当前消息]", currentText].join("\n").trim()
+        : currentText;
       const text = fullText.slice(0, 20_000);
       if (text.length < fullText.length) log("warn", "qq_message_text_truncated", { originalChars: fullText.length, keptChars: text.length });
       if (!text) return { kind: "ignored" };
