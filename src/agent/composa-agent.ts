@@ -11,6 +11,7 @@ import type { ToolSet, UIMessage } from "ai";
 import { getConfig } from "../config";
 import { getAIRequests, recordAIUsage } from "../db/ai-usage";
 import { getOwnedItem } from "../db/items";
+import { failMessageBySource } from "../db/messages";
 import { getPendingAction } from "../db/pending-actions";
 import { log } from "../observability/log";
 import { localDate } from "../core/time";
@@ -44,7 +45,14 @@ export class ComposaAgent extends Think<Env> {
   override includeMcpTools = false;
   override messageConcurrency: MessageConcurrency = "queue";
   override maxSteps = 6;
-  override chatRecovery = true;
+  override chatRecovery = {
+    maxAttempts: 2,
+    noProgressTimeoutMs: 120_000,
+    maxRecoveryWork: 100,
+    maxOomRetries: 1,
+    terminalMessage: "这次处理被运行时中断了，我没有擅自继续操作。请重试刚才的要求。",
+  };
+  override chatStreamStallTimeoutMs = 45_000;
   override storeMessages = false;
   override storeTools = false;
 
@@ -127,6 +135,14 @@ export class ComposaAgent extends Think<Env> {
     if (!submission.accepted) {
       await retryFailedDeliveryForEvent(this.env, this.ctx.storage.sql, message.eventId);
     }
+    if (submission.status === "pending") {
+      this.ctx.waitUntil(this._drainThinkSubmissions().catch((error: unknown) => {
+        log("error", "agent_submission_immediate_drain_failed", {
+          submissionId: submission.submissionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }));
+    }
     return {
       submissionId: submission.submissionId,
       accepted: submission.accepted,
@@ -134,16 +150,34 @@ export class ComposaAgent extends Think<Env> {
     };
   }
 
-  protected override onSubmissionStatus(submission: ThinkSubmissionInspection): void {
+  protected override async onSubmissionStatus(submission: ThinkSubmissionInspection): Promise<void> {
+    let principal = null;
     if (submission.requestId && submission.metadata) {
-      const principal = safeParseTurnPrincipal(submission.metadata);
+      principal = safeParseTurnPrincipal(submission.metadata);
       if (principal) rememberTurnOrigin(this.ctx.storage.sql, submission.requestId, principal);
     }
     log("info", "agent_submission_status", {
       submissionId: submission.submissionId,
       requestId: submission.requestId,
       status: submission.status,
+      error: submission.error,
     });
+    if (
+      principal
+      && submission.requestId
+      && (submission.status === "error" || submission.status === "aborted" || submission.status === "skipped")
+    ) {
+      const response = submission.status === "error"
+        ? "这次 Agent 运行失败了，我没有擅自执行未完成的操作。请稍后重试。"
+        : "这次处理被中断了，我没有擅自继续操作。你可以直接重发刚才的要求。";
+      await deliverTurnResponse(this.env, this.ctx.storage.sql, submission.requestId, response);
+      await failMessageBySource(
+        this.env.DB,
+        principal.channel,
+        principal.eventId,
+        `agent submission ${submission.status}: ${submission.error ?? "no error detail"}`,
+      );
+    }
   }
 
   override async onStepFinish(ctx: StepContext): Promise<void> {
@@ -189,7 +223,10 @@ export class ComposaAgent extends Think<Env> {
       runtime: "cloudflare-think",
       maxSteps: this.maxSteps,
       messageConcurrency: "queue",
-      recovery: this.chatRecovery === true,
+      recovery: true,
+      recoveryPolicy: "bounded",
+      streamStallTimeoutMs: this.chatStreamStallTimeoutMs,
+      immediateSubmissionDrain: true,
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
     };

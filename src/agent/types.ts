@@ -16,6 +16,9 @@ export interface RuntimeProfile {
   maxSteps: number;
   messageConcurrency: "queue";
   recovery: boolean;
+  recoveryPolicy: "bounded";
+  streamStallTimeoutMs: number;
+  immediateSubmissionDrain: boolean;
   mcpTools: boolean;
   workspaceBash: boolean;
 }

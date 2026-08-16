@@ -11,6 +11,9 @@ describe("ComposaAgent runtime", () => {
       maxSteps: 6,
       messageConcurrency: "queue",
       recovery: true,
+      recoveryPolicy: "bounded",
+      streamStallTimeoutMs: 45_000,
+      immediateSubmissionDrain: true,
       mcpTools: false,
       workspaceBash: false,
     });
