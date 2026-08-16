@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { UIMessage } from "ai";
 import type { ChannelName } from "../core/types";
 
 const turnMetadataSchema = z.object({
@@ -17,7 +18,11 @@ export interface AgentPrincipal {
   receivedAt: string;
 }
 
-export function parseTurnPrincipal(metadata: Record<string, unknown> | undefined): AgentPrincipal {
+export type TurnStampedMessage = UIMessage & {
+  metadata: Record<string, unknown> & { turnMetadata: AgentPrincipal };
+};
+
+export function parseTurnPrincipal(metadata: unknown): AgentPrincipal {
   const parsed = turnMetadataSchema.safeParse(metadata);
   if (!parsed.success) throw new Error("Authenticated turn metadata is missing or invalid");
   return {
@@ -29,10 +34,23 @@ export function parseTurnPrincipal(metadata: Record<string, unknown> | undefined
   };
 }
 
-export function safeParseTurnPrincipal(metadata: Record<string, unknown> | undefined): AgentPrincipal | null {
+export function safeParseTurnPrincipal(metadata: unknown): AgentPrincipal | null {
   try {
     return parseTurnPrincipal(metadata);
   } catch {
     return null;
   }
+}
+
+export function stampTurnPrincipal(message: UIMessage, principal: AgentPrincipal): TurnStampedMessage {
+  const metadata = message.metadata && typeof message.metadata === "object" && !Array.isArray(message.metadata)
+    ? message.metadata
+    : {};
+  return {
+    ...message,
+    metadata: {
+      ...metadata,
+      turnMetadata: principal,
+    },
+  };
 }

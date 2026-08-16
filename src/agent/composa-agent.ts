@@ -15,7 +15,7 @@ import { failMessageBySource } from "../db/messages";
 import { getPendingAction } from "../db/pending-actions";
 import { log } from "../observability/log";
 import { localDate } from "../core/time";
-import { parseTurnPrincipal, safeParseTurnPrincipal } from "./context";
+import { parseTurnPrincipal, safeParseTurnPrincipal, stampTurnPrincipal } from "./context";
 import {
   deliverTurnResponse,
   messageText,
@@ -117,20 +117,23 @@ export class ComposaAgent extends Think<Env> {
     status: string;
   }> {
     const message = incomingAgentMessageSchema.parse(raw);
-    const userMessage: UIMessage = {
+    const principal = {
+      channel: message.channel,
+      userId: message.userId,
+      eventId: message.eventId,
+      receivedAt: message.receivedAt,
+      ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
+    };
+    const userMessage: UIMessage = stampTurnPrincipal({
       id: crypto.randomUUID(),
       role: "user",
       parts: [{ type: "text", text: message.text }],
-    };
+    }, principal);
     const submission = await this.submitMessages([userMessage], {
       idempotencyKey: `event:${message.eventId}`,
-      metadata: {
-        channel: message.channel,
-        userId: message.userId,
-        eventId: message.eventId,
-        receivedAt: message.receivedAt,
-        ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
-      },
+      // Ledger metadata powers status hooks and delivery. The user-message
+      // turnMetadata powers activeTurnMetadata during tools and recovery.
+      metadata: principal,
     });
     if (!submission.accepted) {
       await retryFailedDeliveryForEvent(this.env, this.ctx.storage.sql, message.eventId);
