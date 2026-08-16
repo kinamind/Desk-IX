@@ -48,6 +48,9 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("Desk-IX（拾序）");
     expect(DESK_IX_PERSONA).toContain("desk nine");
     expect(DESK_IX_PERSONA).toContain("长期搭档");
+    expect(DESK_IX_PERSONA).toContain("[引用消息]");
+    expect(DESK_IX_PERSONA).toContain("真实会话历史");
+    expect(DESK_IX_PERSONA).toContain("recent_fallback");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
   });
 });

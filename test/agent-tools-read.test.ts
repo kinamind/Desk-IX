@@ -38,6 +38,31 @@ describe("agent read capabilities", () => {
     expect(result.items.some((candidate) => candidate.title === "别人的招聘信息")).toBe(false);
   });
 
+  it("labels recency-only candidates instead of presenting them as lexical matches", async () => {
+    await createItem(env.DB, {
+      type: "task",
+      title: "最近更新但无关的事项",
+      content: "不要因为更新时间较近就把它当作用户所指的对象",
+      rawMessage: "最近更新但无关的事项",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "unrelated-recent-item",
+    });
+
+    const result = await memorySearch(env, principal, "这个", 8);
+    expect(result).toMatchObject({
+      matchMode: "lexical",
+      requiresConversationContext: false,
+    });
+
+    const unmatched = await memorySearch(env, principal, "完全不存在的专有名词", 8);
+    expect(unmatched).toMatchObject({
+      matchMode: "recent_fallback",
+      requiresConversationContext: true,
+    });
+    expect(unmatched.items.length).toBeGreaterThan(0);
+  });
+
   it("reads links stored on the exact owned item and returns bounded content", async () => {
     const item = await createItem(env.DB, {
       type: "resource",
