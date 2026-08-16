@@ -227,6 +227,7 @@ export class ComposaAgent extends Think<Env> {
       recoveryPolicy: "bounded",
       streamStallTimeoutMs: this.chatStreamStallTimeoutMs,
       immediateSubmissionDrain: true,
+      sessionReady: Boolean(this.session),
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
     };

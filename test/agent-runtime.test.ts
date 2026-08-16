@@ -1,9 +1,10 @@
 import { env } from "cloudflare:test";
+import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
 
 describe("ComposaAgent runtime", () => {
   it("uses a bounded, queued Think runtime without broad tools", async () => {
-    const agent = env.COMPOSA_AGENT.getByName("qq:user-42");
+    const agent = await getAgentByName(env.COMPOSA_AGENT, "qq:user-42");
     const profile = await agent.getRuntimeProfile();
 
     expect(profile).toEqual({
@@ -14,6 +15,7 @@ describe("ComposaAgent runtime", () => {
       recoveryPolicy: "bounded",
       streamStallTimeoutMs: 45_000,
       immediateSubmissionDrain: true,
+      sessionReady: true,
       mcpTools: false,
       workspaceBash: false,
     });

@@ -1,3 +1,4 @@
+import { getAgentByName } from "agents";
 import type { IncomingMessage } from "../core/types";
 import { claimMessage, failMessage } from "../db/messages";
 import { log } from "../observability/log";
@@ -13,7 +14,7 @@ export async function submitAgentMessage(env: Env, incoming: IncomingMessage): P
   const claim = await claimMessage(env.DB, incoming);
   try {
     const name = await sessionName(incoming.channel, incoming.userId);
-    const agent = env.COMPOSA_AGENT.getByName(name);
+    const agent = await getAgentByName(env.COMPOSA_AGENT, name);
     const submission = await agent.receive({
       channel: incoming.channel,
       userId: incoming.userId,

@@ -19,6 +19,7 @@ export interface RuntimeProfile {
   recoveryPolicy: "bounded";
   streamStallTimeoutMs: number;
   immediateSubmissionDrain: boolean;
+  sessionReady: boolean;
   mcpTools: boolean;
   workspaceBash: boolean;
 }
