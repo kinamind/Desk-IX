@@ -103,11 +103,9 @@ export async function processIncoming(
         const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId);
         const conversation = await listRecentConversation(env.DB, incoming.channel, incoming.userId);
         const schedule = await listScheduleWindows(env.DB, incoming.channel, incoming.userId, now);
-        const webObservation = await readWebPagesFromText(incoming.text, config, fetcher, 3);
-        for (const failure of webObservation.failures) {
-          log("warn", "web_reader_failed", { url: failure.requestedUrl, error: failure.error });
-        }
-        const intent = await routeMessage(
+        let webObservation = await readWebPagesFromText(incoming.text, config, fetcher, 3);
+        logWebFailures(webObservation);
+        let intent = await routeMessage(
           incoming.text,
           provider,
           now,
@@ -117,7 +115,57 @@ export async function processIncoming(
           schedule,
           webObservation.pages,
         );
-        const result = await executeIntent(env, incoming, intent, provider, fetcher, now, schedule, webObservation);
+
+        let toolFailure: { output: OutgoingMessage; itemId: string | null } | null = null;
+        if (intent.intent === "observe") {
+          const request = intent.toolRequest;
+          const target = request
+            ? await getOwnedItem(env.DB, request.targetItemId, incoming.channel, incoming.userId)
+            : null;
+          if (!request || !target) {
+            toolFailure = {
+              output: { text: "我没能安全地对应到要读取的那条记录，没有读取或修改任何内容。你可以再说一下记录标题。" },
+              itemId: null,
+            };
+          } else {
+            const storedLinks = collectItemUrls(target);
+            if (storedLinks.length === 0) {
+              toolFailure = {
+                output: { text: `我找到了「${target.title}」，但记录里没有可读取的网页链接，所以没有修改。` },
+                itemId: target.id,
+              };
+            } else {
+              webObservation = await readWebPagesFromText(storedLinks.join("\n"), config, fetcher, 3);
+              logWebFailures(webObservation);
+              if (webObservation.pages.length === 0) {
+                toolFailure = {
+                  output: { text: `我找到了「${target.title}」里的链接，但这次都没有成功读到正文，所以没有修改原记录。` },
+                  itemId: target.id,
+                };
+              } else {
+                intent = await routeMessage(
+                  incoming.text,
+                  provider,
+                  now,
+                  config.timezone,
+                  contextItems,
+                  conversation,
+                  schedule,
+                  webObservation.pages,
+                );
+                if (intent.intent === "observe") {
+                  toolFailure = {
+                    output: { text: "我已经读到了相关网页，但模型没有继续完成判断，因此没有修改任何记录。你可以稍后重试。" },
+                    itemId: target.id,
+                  };
+                }
+              }
+            }
+          }
+        }
+
+        const result = toolFailure
+          ?? await executeIntent(env, incoming, intent, provider, fetcher, now, schedule, webObservation);
         output = result.output;
         itemId = result.itemId;
       }
@@ -134,6 +182,25 @@ export async function processIncoming(
     log("error", "message_processing_failed", { channel: incoming.channel, eventId: incoming.eventId, error: message });
     throw error;
   }
+}
+
+function logWebFailures(observation: WebPageBatch): void {
+  for (const failure of observation.failures) {
+    log("warn", "web_reader_failed", { url: failure.requestedUrl, error: failure.error });
+  }
+}
+
+function collectItemUrls(item: Item): string[] {
+  const enrichmentUrls = Array.isArray(item.aiEnrichment.source_urls)
+    ? item.aiEnrichment.source_urls.filter((value): value is string => typeof value === "string")
+    : [];
+  const urls = [
+    ...(item.url ? [item.url] : []),
+    ...discoverUrls(item.content, 3),
+    ...discoverUrls(item.rawMessage, 3),
+    ...enrichmentUrls,
+  ];
+  return [...new Set(urls)].slice(0, 3);
 }
 
 async function executeIntent(

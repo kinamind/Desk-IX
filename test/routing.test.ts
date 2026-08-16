@@ -310,4 +310,119 @@ describe("AI-first routing", () => {
     expect(calls[0]).toContain("bounded episodic retrieval method");
     expect(calls[0]).toContain("重点看方法");
   });
+
+  it("can request the links stored on a referenced item before deciding", async () => {
+    const item: Item = {
+      id: "59e020fd-14de-41fa-b1e9-46ce4ac59c49",
+      type: "note",
+      title: "这个招聘信息帮我记录一下",
+      content: "招聘信息：https://jobs.example/notice",
+      rawMessage: "这个招聘信息帮我记录一下",
+      url: null,
+      tags: [],
+      status: "open",
+      priority: "normal",
+      estimatedDuration: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      completedAt: null,
+      dueAt: null,
+      startAfter: null,
+      originalTimeExpression: null,
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "stored-recruitment",
+      sourceActionIndex: 0,
+      aiEnrichment: {},
+      metadata: {},
+      parentId: null,
+      embeddingId: null,
+    };
+
+    const intent = await routeMessage(
+      "根据刚才的链接内容更新一下深圳理工大学的招聘信息",
+      jsonProvider({
+        intent: "observe",
+        tool: { name: "read_item_links", target_item_id: item.id },
+        confidence: 0.98,
+      }, []),
+      now,
+      "Asia/Singapore",
+      [item],
+    );
+
+    expect(intent).toMatchObject({
+      intent: "observe",
+      toolRequest: { name: "read_item_links", targetItemId: item.id },
+    });
+  });
+
+  it("repairs a generally invalid plan once using the original context and validation error", async () => {
+    const item: Item = {
+      id: "66d62c80-9e60-4d11-bda0-06f13fe7d41e",
+      type: "note",
+      title: "深圳理工大学招聘",
+      content: "待整理",
+      rawMessage: "记录招聘信息",
+      url: null,
+      tags: [],
+      status: "open",
+      priority: "normal",
+      estimatedDuration: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      completedAt: null,
+      dueAt: null,
+      startAfter: null,
+      originalTimeExpression: null,
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "repair-recruitment",
+      sourceActionIndex: 0,
+      aiEnrichment: {},
+      metadata: {},
+      parentId: null,
+      embeddingId: null,
+    };
+    const pages: WebPageReading[] = [{
+      requestedUrl: "https://jobs.example/notice",
+      finalUrl: "https://jobs.example/notice",
+      title: "深圳理工大学招聘",
+      description: "招聘教学科研人员",
+      canonicalUrl: null,
+      source: "jobs.example",
+      text: "深圳理工大学招聘教学科研人员。",
+      truncated: false,
+    }];
+    const calls: string[] = [];
+
+    const intent = await routeMessage(
+      "https://jobs.example/notice",
+      sequenceProvider([
+        { intent: "act", actions: [], confidence: 0.6 },
+        {
+          intent: "act",
+          actions: [{
+            action: "update_item",
+            target_item_id: item.id,
+            title: "深圳理工大学教学科研人员招聘",
+            content: "深圳理工大学招聘教学科研人员。",
+          }],
+          confidence: 0.96,
+        },
+      ], calls),
+      now,
+      "Asia/Singapore",
+      [item],
+      [{ user: "根据刚才的链接更新招聘信息", assistant: "请重新发送链接", receivedAt: now.toISOString() }],
+      [],
+      pages,
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("validation_error");
+    expect(calls[1]).toContain("act requires at least one valid action");
+    expect(calls[1]).toContain("recent_conversation");
+    expect(intent).toMatchObject({ intent: "act", actions: [{ action: "update_item", targetItemId: item.id }] });
+  });
 });

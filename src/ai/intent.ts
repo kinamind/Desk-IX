@@ -19,7 +19,7 @@ import { summarizeItemEnrichment } from "../core/item-enrichment";
 import type { WebPageReading } from "../url/reader";
 import { parseAIJson } from "./openai-compatible";
 import type { AIProvider } from "./provider";
-import { INTENT_PROMPT, REMINDER_REPAIR_PROMPT, RESCHEDULE_PROMPT } from "./prompts";
+import { INTENT_PROMPT, PLAN_REPAIR_PROMPT, REMINDER_REPAIR_PROMPT, RESCHEDULE_PROMPT } from "./prompts";
 
 const isoDate = z.string().datetime({ offset: true });
 
@@ -86,8 +86,14 @@ const avoidWindowSchema = z.object({
 
 const aiActionSchema = z.discriminatedUnion("action", [createActionSchema, targetActionSchema, updateActionSchema, setReminderActionSchema]);
 
+const aiToolSchema = z.object({
+  name: z.literal("read_item_links"),
+  target_item_id: z.string().uuid(),
+}).optional().nullable();
+
 const aiIntentSchema = z.object({
-  intent: z.enum(["act", "query", "analyze", "respond", "help", "clarify"]),
+  intent: z.enum(["act", "observe", "query", "analyze", "respond", "help", "clarify"]),
+  tool: aiToolSchema,
   actions: z.array(aiActionSchema).max(5).optional().nullable(),
   avoid_windows: z.array(avoidWindowSchema).max(10).optional().nullable(),
   query: aiQuerySchema,
@@ -332,7 +338,7 @@ function buildModelInput(
     else if (recentConversation.length > 0) recentConversation.shift();
     else if (recentItems.length > 0) recentItems.pop();
     else if (scheduleContext.length > 0) scheduleContext.pop();
-    else return candidate.slice(0, MAX_MODEL_INPUT_CHARS);
+    else return JSON.stringify({ message: boundedMessage, webpages: webpageContext(), recent_items: [], recent_conversation: [], schedule: [] });
   }
 }
 
@@ -379,25 +385,43 @@ export async function routeMessage(
         { role: "user", content: input },
       ],
     });
-    let parsed = aiIntentSchema.parse(parseAIJson(response.text));
-    let normalized = normalizeActions(parsed.actions, now, contextItems);
+    let parsed: z.infer<typeof aiIntentSchema> | null = null;
+    let normalized: ReturnType<typeof normalizeActions> = { actions: [], needsRepair: false };
+    let validationError: string | null = null;
+    try {
+      parsed = aiIntentSchema.parse(parseAIJson(response.text));
+      normalized = normalizeActions(parsed.actions, now, contextItems);
+      validationError = validatePlan(parsed, normalized, webpages);
+    } catch (error) {
+      validationError = `Invalid JSON or schema: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1_000);
+    }
 
-    if (parsed.intent === "act" && normalized.needsRepair) {
+    if (validationError) {
+      const repairPrompt = parsed?.intent === "act" && normalized.needsRepair
+        ? REMINDER_REPAIR_PROMPT
+        : PLAN_REPAIR_PROMPT;
       response = await provider.generate({
         purpose: "intent",
         expectJson: true,
         messages: [
-          { role: "system", content: `${INTENT_PROMPT}\n${REMINDER_REPAIR_PROMPT}\n当前时间：${now.toISOString()}\n用户时区：${timezone}` },
-          { role: "user", content: JSON.stringify({ original_input_json: input, previous_result: parsed }) },
+          { role: "system", content: `${INTENT_PROMPT}\n${repairPrompt}\n当前时间：${now.toISOString()}\n用户时区：${timezone}` },
+          {
+            role: "user",
+            content: JSON.stringify({
+              original_input_json: input,
+              previous_result: parsed ?? response.text.slice(0, 3_000),
+              validation_error: validationError,
+            }),
+          },
         ],
       });
       parsed = aiIntentSchema.parse(parseAIJson(response.text));
       normalized = normalizeActions(parsed.actions, now, contextItems);
+      const repairedError = validatePlan(parsed, normalized, webpages);
+      if (repairedError) throw new Error(repairedError);
     }
 
-    if (parsed.intent === "act" && (normalized.needsRepair || normalized.actions.length === 0)) {
-      throw new Error("Model returned an unusable action plan");
-    }
+    if (!parsed) throw new Error("Model returned no action plan");
     if (parsed.intent === "clarify") {
       return {
         intent: "clarify",
@@ -410,6 +434,9 @@ export async function routeMessage(
     return {
       intent: parsed.intent,
       ...(parsed.intent === "act" ? { actions: normalized.actions } : {}),
+      ...(parsed.intent === "observe" && parsed.tool ? {
+        toolRequest: { name: parsed.tool.name, targetItemId: parsed.tool.target_item_id },
+      } : {}),
       ...(parsed.avoid_windows?.length ? { avoidWindows: normalizeAvoidWindows(parsed.avoid_windows) } : {}),
       ...(parsed.intent === "query" ? { query: normalizeQuery(parsed.query) } : {}),
       ...(parsed.reply ? { reply: parsed.reply } : {}),
@@ -418,7 +445,7 @@ export async function routeMessage(
       aiEnrichment: {
         provider: "openai-compatible",
         model: response.model,
-        generated_fields: ["intent", "actions", "avoid_windows", "query", "reply"],
+        generated_fields: ["intent", "tool", "actions", "avoid_windows", "query", "reply"],
         context_item_count: contextItems.length,
         webpage_observation_count: webpages.length,
       },
@@ -427,6 +454,18 @@ export async function routeMessage(
     log("warn", "ai_intent_failed", { error: error instanceof Error ? error.message : String(error) });
     return unavailableIntent();
   }
+}
+
+function validatePlan(
+  parsed: z.infer<typeof aiIntentSchema>,
+  normalized: ReturnType<typeof normalizeActions>,
+  webpages: WebPageReading[],
+): string | null {
+  if (parsed.intent === "act" && normalized.needsRepair) return "Action plan has an invalid, near-immediate, post-deadline, or missing reminder";
+  if (parsed.intent === "act" && normalized.actions.length === 0) return "act requires at least one valid action";
+  if (parsed.intent === "observe" && !parsed.tool) return "observe requires a read_item_links tool request";
+  if (parsed.intent === "observe" && webpages.length > 0) return "Webpage observations already exist; continue the task instead of requesting the tool again";
+  return null;
 }
 
 export async function resolveScheduleChange(

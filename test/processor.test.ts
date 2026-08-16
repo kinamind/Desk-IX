@@ -643,6 +643,114 @@ describe("intent to business operation", () => {
     expect(sentText).toContain("来源：已读取 3/3 个网页");
   });
 
+  it("reads links from an owned prior item and continues the update in one bounded tool round", async () => {
+    const now = new Date("2026-08-16T09:10:00.000Z");
+    const recruitmentUrls = [
+      "https://jobs.example/stored-notice",
+      "https://institute.example/stored-center",
+      "https://faculty.example/stored-team",
+    ];
+    const existing = await createItem(env.DB, {
+      type: "note",
+      title: "这个招聘信息帮我记录一下",
+      content: `招聘信息：\n${recruitmentUrls.join("\n")}`,
+      rawMessage: `这个招聘信息帮我记录一下\n${recruitmentUrls.join("\n")}`,
+      sourceChannel: "telegram",
+      sourceUserId: "stored-link-owner",
+      sourceMessageId: "stored-link-original",
+    }, new Date("2026-08-15T04:36:01.339Z"));
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:stored-link-followup",
+      messageId: "112",
+      userId: "stored-link-owner",
+      text: "根据刚才的链接内容更新一下深圳理工大学的招聘信息",
+      timestamp: now.toISOString(),
+      eventType: "message",
+      replyToMessageId: "112",
+    };
+    const pageFetches: string[] = [];
+    let sentText = "";
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.telegram.org")) {
+        if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+        sentText = (JSON.parse(init.body) as { text: string }).text;
+        return Response.json({ ok: true, result: { message_id: 212 } });
+      }
+      pageFetches.push(url);
+      const body = url.includes("stored-notice")
+        ? "深圳理工大学面向海内外招聘教学科研人员，包含岗位职责和申请入口。"
+        : url.includes("stored-center")
+          ? "智能医学文件处理研究中心介绍及研究方向。"
+          : "人工智能研究院师资队伍与团队介绍。";
+      return new Response(`<html><head><title>深圳理工大学招聘资料</title></head><body>${body}</body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    };
+    let intentCalls = 0;
+    const provider: AIProvider = {
+      generate: (request) => {
+        if (request.purpose === "url_enrichment") {
+          return Promise.resolve({
+            text: JSON.stringify({
+              category: "recruitment",
+              title: "深圳理工大学人工智能方向教学科研人员招聘",
+              summary: "深圳理工大学面向海内外招聘人工智能方向教学科研人员。",
+              organizations: ["深圳理工大学"],
+              roles: ["教学科研人员"],
+              locations: ["深圳"],
+              requirements: ["以招聘公告中的岗位条件为准"],
+              tags: ["招聘", "人工智能", "深圳"],
+            }),
+            model: "test-model",
+            inputTokens: 10,
+            outputTokens: 5,
+          });
+        }
+        intentCalls += 1;
+        const payload = intentCalls === 1
+          ? {
+              intent: "observe",
+              tool: { name: "read_item_links", target_item_id: existing.id },
+              confidence: 0.98,
+            }
+          : {
+              intent: "act",
+              actions: [{
+                action: "update_item",
+                target_item_id: existing.id,
+                title: "深圳理工大学人工智能方向教学科研人员招聘",
+                content: "深圳理工大学面向海内外招聘人工智能方向教学科研人员。",
+              }],
+              confidence: 0.99,
+            };
+        return Promise.resolve({ text: JSON.stringify(payload), model: "test-model", inputTokens: 10, outputTokens: 5 });
+      },
+    };
+
+    await processIncoming(env, incoming, fetcher, now, provider);
+
+    const item = await getItem(env.DB, existing.id);
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM items WHERE source_channel = ? AND source_user_id = ?",
+    ).bind("telegram", incoming.userId).first<{ count: number }>();
+    expect(intentCalls).toBe(2);
+    expect(pageFetches).toEqual(recruitmentUrls);
+    expect(count?.count).toBe(1);
+    expect(item).toMatchObject({
+      title: "深圳理工大学人工智能方向教学科研人员招聘",
+      url: recruitmentUrls[0],
+    });
+    expect(item?.aiEnrichment).toMatchObject({
+      category: "recruitment",
+      organizations: ["深圳理工大学"],
+      source_urls: recruitmentUrls,
+    });
+    expect(sentText).toContain("已整理招聘信息");
+    expect(sentText).toContain("来源：已读取 3/3 个网页");
+  });
+
   it("gives analysis the current timezone and structured recruitment facts", async () => {
     const now = new Date("2026-08-16T08:03:39.000Z");
     await createItem(env.DB, {

@@ -8,7 +8,7 @@ export const REMINDER_MODES = ["deferred_action", "pre_event", "at_deadline", "e
 export type ReminderMode = (typeof REMINDER_MODES)[number];
 
 export type ChannelName = "telegram" | "qq";
-export type MessageIntent = "act" | "query" | "analyze" | "respond" | "help" | "clarify" | "unavailable";
+export type MessageIntent = "act" | "observe" | "query" | "analyze" | "respond" | "help" | "clarify" | "unavailable";
 
 export interface Item {
   id: string;
@@ -127,9 +127,15 @@ export interface ScheduleWindow {
 
 export type AgentAction = CreateItemAgentAction | TargetItemAgentAction | UpdateItemAgentAction | SetReminderAgentAction;
 
+export interface AgentToolRequest {
+  name: "read_item_links";
+  targetItemId: string;
+}
+
 export interface ParsedIntent {
   intent: MessageIntent;
   actions?: AgentAction[];
+  toolRequest?: AgentToolRequest;
   avoidWindows?: ScheduleWindow[];
   query?: ItemSearchFilters;
   reply?: string;

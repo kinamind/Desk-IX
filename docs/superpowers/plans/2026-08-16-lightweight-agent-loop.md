@@ -2,7 +2,7 @@
 
 **Goal:** Make Composa a lightweight personal Agent with observation, reasoning, tools, memory, and follow-up—not a rule-driven collector or Todo extractor.
 
-**Architecture:** Keep the existing single Worker, D1 memory, and Workflows runtime. Add a bounded observation stage before planning, let the model choose the task semantics, validate its structured actions in code, and return tool results to the model when an answer requires retrieved facts. Deterministic code remains responsible only for security, ownership, idempotency, schema validation, time validity, and delivery reliability.
+**Architecture:** Keep the existing single Worker, D1 memory, and Workflows runtime. Add a bounded observation stage before planning, let the model request one bounded observation round for links stored in prior items, validate its structured actions in code, and return tool results to the model when an answer requires retrieved facts. Deterministic code remains responsible only for security, ownership, idempotency, schema validation, time validity, loop bounds, and delivery reliability.
 
 **Tech Stack:** TypeScript, Zod, Cloudflare Workers, D1, Workflows, OpenAI-compatible provider, Vitest Workers pool
 
@@ -33,6 +33,8 @@
 
 - [x] Let the model choose structured D1 query filters.
 - [x] Return actual query results to a second model pass for synthesis instead of showing a fixed row list.
+- [x] Let the model request `read_item_links` for an owned prior item, execute one bounded observation round, then continue the same task with real page text.
+- [x] Repair one generally invalid model plan using its validation error plus the original message, conversation, memory, schedule, and webpage context.
 - [x] Permit an action plan to include a contextual reply when the user asks to both act and explain.
 - [x] Keep a factual deterministic fallback if the query response model fails.
 
