@@ -2,7 +2,7 @@ import type { RuntimeConfig } from "../src/config";
 
 export function testConfig(): RuntimeConfig {
   return {
-    appName: "Composa",
+    appName: "Desk-IX",
     locale: "zh-CN",
     timezone: "Asia/Singapore",
     dailyPlanTime: "08:00",

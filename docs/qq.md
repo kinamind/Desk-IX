@@ -1,6 +1,6 @@
 # QQ Bot 接入
 
-Composa 实现的是 QQ 开放平台 HTTP Webhook + C2C 私聊通道，包括官方 Ed25519 challenge/验签、单聊收发、interaction callback、主动提醒和自定义 keyboard。
+Desk-IX 实现的是 QQ 开放平台 HTTP Webhook + C2C 私聊通道，包括官方 Ed25519 challenge/验签、单聊收发、interaction callback、主动提醒和自定义 keyboard。
 
 ## 1. 创建与授权
 
@@ -9,7 +9,7 @@ Composa 实现的是 QQ 开放平台 HTTP Webhook + C2C 私聊通道，包括官
 3. 如要使用按钮，订阅 `INTERACTION_CREATE` 并申请自定义 keyboard/消息交互权限。
 4. 确认机器人具备 C2C 主动消息授权。提醒和 Daily Plan 没有原消息 `msg_id`，会消耗/受限于平台的主动消息资格与频率规则。
 
-QQ 权限和配额由开放平台控制；Composa 只做有限重试，不会绕过平台限制。
+QQ 权限和配额由开放平台控制；Desk-IX 只做有限重试，不会绕过平台限制。
 
 ## 2. 配置 App 与 secrets
 
@@ -17,8 +17,7 @@ QQ 权限和配额由开放平台控制；Composa 只做有限重试，不会绕
 
 ```jsonc
 "QQ_APP_ID": "你的 App ID",
-"QQ_ALLOWED_USER_OPENIDS": "你的 user_openid",
-"DAILY_PLAN_TARGETS": "qq:你的 user_openid"
+"QQ_ALLOWED_USER_OPENIDS": "你的 user_openid"
 ```
 
 写入 Cloudflare secrets：
@@ -27,7 +26,7 @@ QQ 权限和配额由开放平台控制；Composa 只做有限重试，不会绕
 npx wrangler secret put QQ_APP_SECRET
 ```
 
-QQ 后台只提供一个 `AppSecret`。Composa 同时用它完成 Ed25519 Webhook 签名和 App Access Token 获取；QQ token 接口请求体中的字段名虽然叫 `clientSecret`，值仍然就是这个 `AppSecret`。
+QQ 后台只提供一个 `AppSecret`。Desk-IX 同时用它完成 Ed25519 Webhook 签名和 App Access Token 获取；QQ token 接口请求体中的字段名虽然叫 `clientSecret`，值仍然就是这个 `AppSecret`。
 
 ## 3. 第一次取得自己的 `user_openid`
 
@@ -51,10 +50,10 @@ npx wrangler tail composa --format pretty
 在 QQ 开放平台设置 HTTPS 回调：
 
 ```text
-https://<worker-host>/webhooks/qq
+https://desk-ix.kinamind.org/webhooks/qq
 ```
 
-平台会发送 `op=13` 验证请求。Composa 会：
+平台会发送 `op=13` 验证请求。Desk-IX 会：
 
 1. 校验 `X-Bot-Appid`；
 2. 将 `AppSecret` repeat 后截取 32-byte seed；
@@ -69,15 +68,16 @@ https://<worker-host>/webhooks/qq
 - 分享卡片：合并 `ark_data.prompt`、隐藏 fields 与附件文本；其中出现正常 HTTP(S) URL 时继续调用网页阅读工具。若平台只给内部卡片 ID/小程序 scheme，则保留并理解预览内容，但不会猜造公开网址。
 - 回复：`POST /v2/users/{user_openid}/messages`；即时回复携带原 `msg_id`。
 - 主动提醒：同一 endpoint，不携带原 `msg_id`，因此依赖主动消息授权。
+- 每日安排：首次普通对话会自动创建个人档案并启用；直接告诉 Desk-IX “每天 11 点发安排”“我在东京”“暂停每日安排”即可修改。
 - 按钮：发送自定义 keyboard，data 与 Telegram 共用 `done/later/reschedule/details` 协议。
 - 回调：`INTERACTION_CREATE`，处理后 `PUT /interactions/{id}` ack。
-- 如果账号没有自定义 keyboard 权限，Composa 在 QQ 返回 400/403 后自动再发一次纯文本，提醒本身不会因此丢失。
+- 如果账号没有自定义 keyboard 权限，Desk-IX 在 QQ 返回 400/403 后自动再发一次纯文本，提醒本身不会因此丢失。
 
 ## 常见问题
 
 - challenge 失败：确认回调指向当前 Worker、`QQ_APP_ID` 与 `QQ_APP_SECRET` 属于同一个机器人。
 - 收到 403：查看 allowlist；不要把 QQ 号当作 `user_openid`。
 - 普通回复成功、定时提醒失败：通常是主动消息授权/配额，而不是 Workflow 时间问题。
-- 按钮不显示：申请 keyboard 权限；Composa 会退化为纯文本，仍可发自然语言操作。
+- 按钮不显示：申请 keyboard 权限；Desk-IX 会退化为纯文本，仍可发自然语言操作。
 - `QQBot` token 错误：确认 `QQ_APP_SECRET`；Access Token 由 Worker 临时获取，不持久化、不记录日志。
 - 卡片能保存但读不到原网页：检查 QQ 回调是否提供正常 HTTP(S) 跳转地址；内部卡片 ID 无法可靠反推出公开 URL。

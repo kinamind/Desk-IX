@@ -46,15 +46,15 @@ npx wrangler d1 execute composa --remote --command "SELECT name FROM sqlite_mast
 
 在 Cloudflare Dashboard 的 **Variables and secrets** 中设置实例专属值：
 
-- `TIMEZONE`、`DAILY_PLAN_TIME`
+- `TIMEZONE`、`DAILY_PLAN_TIME`（仅作为新个人档案默认值）
 - `TELEGRAM_ALLOWED_USER_IDS`
 - `QQ_APP_ID`、`QQ_ALLOWED_USER_OPENIDS`
-- `DAILY_PLAN_TARGETS`
+- `DAILY_PLAN_TARGETS`（仅兼容旧部署，新用户无需设置）
 - AI endpoint/model/budget；该 OpenAI-compatible endpoint 必须支持原生 `tool_calls`
 
 `wrangler.jsonc` 开启了 `keep_vars`，后续运行 `npm run deploy` 会保留这些面板值，不会用仓库中的空占位覆盖它们。
 
-首次不知道 QQ openid 时先保持 QQ allowlist 与 QQ Daily Plan target 为空，按 [QQ 接入指南](qq.md) 的一次性日志流程取得。
+首次不知道 QQ openid 时先保持 QQ allowlist 为空，按 [QQ 接入指南](qq.md) 的一次性日志流程取得。授权用户第一次发普通消息时会自动创建个人档案并订阅每日安排，之后可直接在对话里修改时间、时区或关闭。
 
 ## 4. 首次部署与 secrets
 
@@ -74,12 +74,12 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put QQ_APP_SECRET
 ```
 
-`AI_API_KEY` 可以不设置，但除 `/help` 和按钮 callback 外的自然语言理解会明确提示不可用且不会擅自保存。Composa 不会选择任何未经配置的付费 fallback。自定义 `AI_BASE_URL` 应以 OpenAI Chat Completions 兼容根路径结尾（通常为 `/v1`），并确认所选 `AI_MODEL` 支持工具调用；仅支持纯文本聊天的代理不能运行 v2 工具循环。
+`AI_API_KEY` 可以不设置，但除 `/help` 和按钮 callback 外的自然语言理解会明确提示不可用且不会擅自保存。Desk-IX 不会选择任何未经配置的付费 fallback。自定义 `AI_BASE_URL` 应以 OpenAI Chat Completions 兼容根路径结尾（通常为 `/v1`），并确认所选 `AI_MODEL` 支持工具调用；仅支持纯文本聊天的代理不能运行 v2 工具循环。
 
 Secret 更新后检查部署与健康状态：
 
 ```bash
-export COMPOSA_URL="https://<worker-host>"
+export DESK_IX_URL="https://desk-ix.kinamind.org"
 npm run smoke
 ```
 
@@ -105,7 +105,7 @@ npm run smoke
 9. 紧接着说“刚才那个已经完成了”，确认原事项变为 completed、待提醒取消，并且没有生成重复记录。
 10. 新建两条临时事项，再用一句话完成一条、舍弃另一条；随后用自然语言恢复舍弃项。
 11. 发一句普通追问或闲聊，确认模型可以直接回复且不会自动写成 note/task。
-12. 用两个不同授权身份分别预览 Daily Plan，确认不会混入另一身份的事项。
+12. 用两个不同授权身份设置不同的时区与 Daily Plan 时间，确认各自按本地时间发送且不会混入另一身份的事项。
 13. 用非 allowlist 账号验证被拒绝。
 14. 再次 `npm run deploy`，确认 D1 item 与 Workflow reminder 未丢失。
 
@@ -134,4 +134,4 @@ npm run smoke
 
 Migration 只能向前新增新版本文件；不要修改已在远端应用的历史 migration。
 
-v2 首次部署还会应用一个 additive Durable Object migration，创建 `ComposaAgent` 的 SQLite 会话实例；不修改现有 D1 schema，也不会清除已有事项和提醒。回滚 Worker 代码不会自动删除这些实例。
+v2 首次部署还会应用一个 additive Durable Object migration，创建 `ComposaAgent` 的 SQLite 会话实例。后续个人档案通过独立的 additive D1 migration 创建，不会清除已有事项、提醒或会话。回滚 Worker 代码不会自动删除这些实例。

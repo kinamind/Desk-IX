@@ -1,8 +1,8 @@
-# Composa v2 架构说明
+# Desk-IX v2 架构说明
 
 ## 设计取舍
 
-Composa v2 从 OpenClaw 的实现出发做减法，而不是继续扩充意图分类器。保留的是让 Agent 真正具备组合能力的内核：每个会话串行处理、模型原生选择工具、工具结果回到同一轮上下文、持久状态、幂等写入、生命周期观测和可靠投递。
+Desk-IX v2 从 OpenClaw 的实现出发做减法，而不是继续扩充意图分类器。保留的是让 Agent 真正具备组合能力的内核：每个会话串行处理、模型原生选择工具、工具结果回到同一轮上下文、持久状态、幂等写入、生命周期观测和可靠投递。
 
 省去的是个人助理当前不需要或 Cloudflare Workers 不适合承载的重量：任意 shell 与浏览器控制、MCP、插件市场、多 Agent 编排、本机工作区、复杂模型路由和通用 Gateway。
 
@@ -30,7 +30,7 @@ sequenceDiagram
   C->>W: 已验证 webhook
   W->>W: allowlist + 事件去重
   W->>S: 以 eventId 幂等提交
-  S->>M: 会话历史 + 当前时间 + 待处理交互
+  S->>M: 会话历史 + 个人档案 + 当前时间 + 待处理交互
   loop 最多 6 个模型步骤
     M->>T: 原生 tool call
     T->>D: 校验后读取或写入
@@ -47,7 +47,7 @@ sequenceDiagram
 
 ## Agent 能看到的工具
 
-运行时只开放八个应用工具：
+运行时只开放十个应用工具：
 
 | 工具 | 用途 |
 |---|---|
@@ -55,10 +55,12 @@ sequenceDiagram
 | `item_get` | 读取一个确定事项及其提醒 |
 | `web_read` | 读取最多三个普通公开网页，或读取事项中保存的链接 |
 | `schedule_list` | 查看当前用户未来日程与提醒窗口 |
+| `profile_get` | 读取当前用户的称呼、时区、作息与沟通偏好 |
 | `item_create` | 新建真正的新事项 |
 | `item_update` | 更新原事项及结构化事实、来源 |
 | `item_transition` | 完成、舍弃/归档、恢复 |
 | `reminder_manage` | 设置、改期或取消提醒 |
+| `profile_update` | 更新当前用户明确表达或授权自主选择的个人偏好 |
 
 模型没有 bash、文件系统、MCP 或任意网络请求能力。读取工具先从当前会话身份取得 `channel + userId`；写工具还要求运行时权限，并为每个动作生成稳定幂等键。
 
@@ -76,8 +78,9 @@ memory_search → item_get → web_read → item_update → 自然语言说明�
 - `reminders`：提醒时间、通道目标、Workflow 与投递状态。
 - `messages`：Webhook 事件去重、处理状态、错误和回复审计。
 - `pending_actions`：按钮“改期”后的短期上下文，由下一轮 Agent 直接取得精确 item ID。
+- `user_profiles`：相互称呼、每用户时区、每日安排订阅与时间、作息目标和沟通偏好。
 - `daily_plan_runs`、`ai_usage`：每日计划幂等与 AI 预算。
-- Durable Object SQLite：Think 会话状态、submission 状态，以及 Composa 自己的 turn-origin / reply-outbox 表。
+- Durable Object SQLite：Think 会话状态、submission 状态，以及 Desk-IX 自己的 turn-origin / reply-outbox 表。
 
 Think 是实验性依赖，限定在 `src/agent/` 内。即使未来替换运行时，D1 里的事项与提醒无需迁移；HTTP ingress 只依赖 `receive()` 这一层应用接口。
 
@@ -91,7 +94,7 @@ Think 是实验性依赖，限定在 `src/agent/` 内。即使未来替换运行
 
 ## Daily Plan 与固定回调
 
-Daily Plan 仍由 Cron 每 15 分钟检查本地配置时间，并通过 `daily_plan_runs` 保证每个目标每天最多成功一次。它从 D1 读取当前用户真实事项，AI 只负责取舍和表达。
+Daily Plan 仍由 Cron 每 15 分钟唤醒，但发送对象、IANA 时区和偏好时间来自 `user_profiles`，不再依赖隐藏的部署目标列表。每个档案独立计算本地日期，并通过 `daily_plan_runs` 保证每天最多成功一次。它从 D1 读取当前用户真实事项、提醒与忙碌窗口；AI 只负责取舍、安排和符合个人风格的表达。
 
 按钮 callback 已携带明确动作和 item ID，不需要浪费一次 Agent 回合。`完成`、`舍弃`、`稍后`、`改期`、`详情` 继续由确定性处理器执行；其中“改期”写入 `pending_actions`，下一句自然语言进入 Agent 会话。
 
@@ -102,6 +105,6 @@ Daily Plan 仍由 Cron 每 15 分钟检查本地配置时间，并通过 `daily_
 - 单回合最多 6 个模型步骤，每步和工具都有超时，每日请求计入同一预算。
 - 回复先记入 DO outbox 再调用平台；失败可在重复 webhook 时恢复。
 - 外部聊天平台不存在跨系统原子事务：若平台已接受消息而 Worker 在落账前崩溃，仍可能出现极低概率重复投递，这是当前的分布式系统边界。
-- 当前日程只包含 Composa 自己的事项与提醒，尚未接入外部 Calendar。
+- 当前日程只包含 Desk-IX 自己的事项与提醒，尚未接入外部 Calendar；作息建议不是医疗建议，也不会在没有用户目标时编造具体睡眠时间。
 
 完整 OpenClaw 对照研究见 [研究报告](research/openclaw-composa-v2-2026-08-16/report.md)，迁移步骤见 [实施计划](superpowers/plans/2026-08-16-composa-v2-openclaw-runtime.md)。

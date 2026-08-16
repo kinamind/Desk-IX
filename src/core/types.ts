@@ -6,6 +6,50 @@ export type Priority = (typeof PRIORITIES)[number];
 
 export type ChannelName = "telegram" | "qq";
 
+export const CHRONOTYPES = ["unknown", "early", "balanced", "late"] as const;
+export type Chronotype = (typeof CHRONOTYPES)[number];
+export type UserPreferenceValue = string | number | boolean | null | string[];
+
+export interface UserProfile {
+  channel: ChannelName;
+  userId: string;
+  userCallName: string | null;
+  assistantCallName: string;
+  timezone: string;
+  locale: string;
+  dailyPlanEnabled: boolean;
+  dailyPlanTime: string;
+  chronotype: Chronotype;
+  targetWakeTime: string | null;
+  targetSleepTime: string | null;
+  routineCoaching: boolean;
+  communicationStyle: string;
+  preferences: Record<string, UserPreferenceValue>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserProfileDefaults {
+  timezone: string;
+  locale: string;
+  dailyPlanTime: string;
+}
+
+export interface UserProfileUpdate {
+  userCallName?: string | null;
+  assistantCallName?: string;
+  timezone?: string;
+  locale?: string;
+  dailyPlanEnabled?: boolean;
+  dailyPlanTime?: string;
+  chronotype?: Chronotype;
+  targetWakeTime?: string | null;
+  targetSleepTime?: string | null;
+  routineCoaching?: boolean;
+  communicationStyle?: string;
+  preferences?: Record<string, UserPreferenceValue>;
+}
+
 export interface Item {
   id: string;
   type: ItemType;

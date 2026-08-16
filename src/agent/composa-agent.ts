@@ -13,6 +13,7 @@ import { getAIRequests, recordAIUsage } from "../db/ai-usage";
 import { getOwnedItem } from "../db/items";
 import { failMessageBySource } from "../db/messages";
 import { getPendingAction } from "../db/pending-actions";
+import { ensureUserProfile, getUserProfile } from "../db/user-profiles";
 import { log } from "../observability/log";
 import { localDate } from "../core/time";
 import { parseTurnPrincipal, safeParseTurnPrincipal, stampTurnPrincipal } from "./context";
@@ -24,7 +25,7 @@ import {
   retryFailedDeliveryForEvent,
 } from "./delivery";
 import { createComposaModel } from "./model";
-import { buildSystemPrompt } from "./prompt";
+import { buildProfileContext, buildSystemPrompt } from "./prompt";
 import { createReadTools } from "./tools/read";
 import { createWriteActions } from "./tools/write";
 import { incomingAgentMessageSchema, type IncomingAgentMessage, type RuntimeProfile } from "./types";
@@ -34,10 +35,12 @@ const ACTIVE_TOOLS = [
   "item_get",
   "web_read",
   "schedule_list",
+  "profile_get",
   "item_create",
   "item_update",
   "item_transition",
   "reminder_manage",
+  "profile_update",
 ];
 
 export class ComposaAgent extends Think<Env> {
@@ -69,7 +72,7 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override getSystemPrompt(): string {
-    return buildSystemPrompt(getConfig(this.env));
+    return buildSystemPrompt();
   }
 
   override getTools(): ToolSet {
@@ -83,7 +86,13 @@ export class ComposaAgent extends Think<Env> {
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
     const principal = parseTurnPrincipal(this.activeTurnMetadata);
     const config = getConfig(this.env);
-    const today = localDate(new Date(), config.timezone);
+    const now = new Date();
+    const profile = await ensureUserProfile(this.env.DB, principal.channel, principal.userId, {
+      timezone: config.timezone,
+      locale: config.locale,
+      dailyPlanTime: config.dailyPlanTime,
+    }, now);
+    const today = localDate(now, profile.timezone);
     const used = await getAIRequests(this.env.DB, today, "openai-compatible");
     if (used >= config.aiDailyRequestLimit) throw new Error("Daily AI request budget exhausted");
     const pending = await getPendingAction(this.env.DB, principal.channel, principal.userId);
@@ -95,7 +104,7 @@ export class ComposaAgent extends Think<Env> {
       : "";
     return {
       activeTools: ACTIVE_TOOLS,
-      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆。当前本地时间：${new Intl.DateTimeFormat(config.locale, { timeZone: config.timezone, dateStyle: "full", timeStyle: "long" }).format(new Date())}。${pendingContext}`,
+      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now)}${pendingContext}`,
       maxSteps: this.maxSteps,
       maxRetries: 1,
       timeout: {
@@ -107,7 +116,7 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override authorizeTurn() {
-    return { allowed: true, grantedPermissions: ["items:write", "reminders:write"] };
+    return { allowed: true, grantedPermissions: ["items:write", "reminders:write", "profile:write"] };
   }
 
   async receive(raw: IncomingAgentMessage): Promise<{
@@ -116,6 +125,12 @@ export class ComposaAgent extends Think<Env> {
     status: string;
   }> {
     const message = incomingAgentMessageSchema.parse(raw);
+    const config = getConfig(this.env);
+    await ensureUserProfile(this.env.DB, message.channel, message.userId, {
+      timezone: config.timezone,
+      locale: config.locale,
+      dailyPlanTime: config.dailyPlanTime,
+    });
     const principal = {
       channel: message.channel,
       userId: message.userId,
@@ -184,9 +199,13 @@ export class ComposaAgent extends Think<Env> {
 
   override async onStepFinish(ctx: StepContext): Promise<void> {
     const config = getConfig(this.env);
+    const principal = safeParseTurnPrincipal(this.activeTurnMetadata);
+    const profile = principal
+      ? await getUserProfile(this.env.DB, principal.channel, principal.userId)
+      : null;
     await recordAIUsage(
       this.env.DB,
-      localDate(new Date(), config.timezone),
+      localDate(new Date(), profile?.timezone ?? config.timezone),
       "openai-compatible",
       ctx.usage.inputTokens ?? 0,
       ctx.usage.outputTokens ?? 0,

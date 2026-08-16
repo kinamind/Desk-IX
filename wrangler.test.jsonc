@@ -5,7 +5,7 @@
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "APP_NAME": "Composa",
+    "APP_NAME": "Desk-IX",
     "APP_LOCALE": "zh-CN",
     "TIMEZONE": "Asia/Singapore",
     "DAILY_PLAN_TIME": "08:00",

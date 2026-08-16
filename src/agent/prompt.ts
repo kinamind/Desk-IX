@@ -1,7 +1,6 @@
-import type { RuntimeConfig } from "../config";
+import type { UserProfile } from "../core/types";
 
-export const COMPOSA_PERSONA = `你是 Composa（拾序），一个轻量、可靠、有判断力的个人助理。
-你的名字来自 compose + persona：把零散事务组织起来。Compose what matters. Find your order.
+export const DESK_IX_PERSONA = `你是 Desk-IX（拾序），英文名读作 desk nine。你是一个安静、敏锐、可靠、有判断力的私人助理，也是会逐渐了解用户的长期搭档。
 
 工作方式：
 - 先理解用户真正想推进的事情，再组合必要工具；不要把每句话机械地变成待办。
@@ -9,14 +8,37 @@ export const COMPOSA_PERSONA = `你是 Composa（拾序），一个轻量、可�
 - “刚才的、那个、它”等指代要结合会话和搜索结果解析；优先更新已有事项，不重复创建。
 - 有链接时，根据用户指令决定是否读取、总结、记录、更新或安排后续；不要只保存裸链接。
 - 提醒应对未来行动有帮助。除非用户明确要求，不要为暂缓事项安排几分钟内的即时提醒。
+- 自然使用用户偏好的相互称呼、时区、作息和沟通方式；没有设置称呼时直接说“你”，不要编造名字。
+- 用户明确表达个人偏好，或授权你为容易修改的日程细节自主决定时，用 profile_update 保存；不要推断身份、健康状况等敏感属性。
+- 作息建议要温和、渐进、可修改，不说教，不假装知道用户没有提供的入睡或起床时间。
 - 说清你实际做了什么、关键判断和可修改之处；不要声称做了工具结果中没有发生的事。
 - 回复自然、简洁，默认使用中文。`;
 
-export function buildSystemPrompt(config: RuntimeConfig, now = new Date()): string {
-  const localTime = new Intl.DateTimeFormat(config.locale, {
-    timeZone: config.timezone,
+export function buildSystemPrompt(): string {
+  return DESK_IX_PERSONA;
+}
+
+export function buildProfileContext(profile: UserProfile, now = new Date()): string {
+  const localTime = new Intl.DateTimeFormat(profile.locale, {
+    timeZone: profile.timezone,
     dateStyle: "full",
     timeStyle: "long",
   }).format(now);
-  return `${COMPOSA_PERSONA}\n\n当前时间：${localTime}\n时区：${config.timezone}`;
+  return [
+    `当前本地时间：${localTime}`,
+    `用户档案：${JSON.stringify({
+      userCallName: profile.userCallName,
+      assistantCallName: profile.assistantCallName,
+      timezone: profile.timezone,
+      locale: profile.locale,
+      dailyPlanEnabled: profile.dailyPlanEnabled,
+      dailyPlanTime: profile.dailyPlanTime,
+      chronotype: profile.chronotype,
+      targetWakeTime: profile.targetWakeTime,
+      targetSleepTime: profile.targetSleepTime,
+      routineCoaching: profile.routineCoaching,
+      communicationStyle: profile.communicationStyle,
+      preferences: profile.preferences,
+    })}`,
+  ].join("\n");
 }

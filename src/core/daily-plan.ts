@@ -5,10 +5,12 @@ import { DAILY_PLAN_PROMPT } from "../ai/prompts";
 import { getChannelAdapter } from "../channels/registry";
 import { claimDailyPlanRun, failDailyPlanRun, finishDailyPlanRun } from "../db/daily-plan-runs";
 import { searchItems, searchOwnedItems } from "../db/items";
+import { listScheduleWindows } from "../db/schedule";
+import { ensureUserProfile, getUserProfile, listEnabledDailyPlanProfiles } from "../db/user-profiles";
 import { log } from "../observability/log";
 import { summarizeItemEnrichment } from "./enrichment-summary";
 import { localDate, localDayBounds, localTime } from "./time";
-import type { ChannelTarget, Item } from "./types";
+import type { ChannelTarget, Item, UserProfile } from "./types";
 
 export function shouldRunDailyPlan(now: Date, timezone: string, configuredTime: string): boolean {
   return localTime(now, timezone) >= configuredTime;
@@ -21,11 +23,23 @@ export async function buildDailyPlan(
   target?: ChannelTarget,
 ): Promise<string> {
   const config = getConfig(env);
+  const profile = target
+    ? await getUserProfile(env.DB, target.channel, target.userId)
+      ?? await ensureUserProfile(env.DB, target.channel, target.userId, {
+        timezone: config.timezone,
+        locale: config.locale,
+        dailyPlanTime: config.dailyPlanTime,
+      }, now)
+    : null;
+  const timezone = profile?.timezone ?? config.timezone;
   const filters = { statuses: ["open", "raw", "active"], limit: 50 };
   const items = target
     ? await searchOwnedItems(env.DB, target.channel, target.userId, filters)
     : await searchItems(env.DB, filters);
-  const fallback = deterministicPlan(items, now, config.timezone);
+  const schedule = target
+    ? await listScheduleWindows(env.DB, target.channel, target.userId, now, 2)
+    : [];
+  const fallback = deterministicPlan(items, now, timezone, profile?.userCallName ?? null);
   if (items.length === 0) return fallback;
   if (!isAIEnabled(env)) return annotateFallback(fallback);
 
@@ -39,8 +53,16 @@ export async function buildDailyPlan(
         {
           role: "user",
           content: JSON.stringify({
-            date: localDate(now, config.timezone),
-            timezone: config.timezone,
+            date: localDate(now, timezone),
+            currentLocalTime: localTime(now, timezone),
+            timezone,
+            profile: profile ? dailyPlanProfileContext(profile) : null,
+            schedule: schedule.slice(0, 30).map((window) => ({
+              title: window.title,
+              start_at: window.startAt,
+              end_at: window.endAt,
+              source: window.source,
+            })),
             items: items.slice(0, 30).map((item) => {
               const enrichment = summarizeItemEnrichment(item.aiEnrichment);
               return {
@@ -67,23 +89,57 @@ export async function buildDailyPlan(
   }
 }
 
-export async function runDailyPlan(env: Env, now = new Date(), fetcher: typeof fetch = fetch, force = false): Promise<void> {
+export async function listDailyPlanProfiles(env: Env): Promise<UserProfile[]> {
   const config = getConfig(env);
-  if (!force && !shouldRunDailyPlan(now, config.timezone, config.dailyPlanTime)) return;
-  if (config.dailyPlanTargets.length === 0) {
+  const profiles = await listEnabledDailyPlanProfiles(env.DB);
+  const byIdentity = new Map(profiles.map((profile) => [`${profile.channel}:${profile.userId}`, profile]));
+  for (const target of config.dailyPlanTargets) {
+    const key = `${target.channel}:${target.userId}`;
+    if (byIdentity.has(key)) continue;
+    const profile = await ensureUserProfile(env.DB, target.channel, target.userId, {
+      timezone: config.timezone,
+      locale: config.locale,
+      dailyPlanTime: config.dailyPlanTime,
+    });
+    if (profile.dailyPlanEnabled) byIdentity.set(key, profile);
+  }
+  return [...byIdentity.values()];
+}
+
+export async function listDueDailyPlanProfiles(
+  env: Env,
+  now = new Date(),
+  force = false,
+): Promise<UserProfile[]> {
+  const profiles = await listDailyPlanProfiles(env);
+  return force
+    ? profiles
+    : profiles.filter((profile) => shouldRunDailyPlan(now, profile.timezone, profile.dailyPlanTime));
+}
+
+export async function runDailyPlan(env: Env, now = new Date(), fetcher: typeof fetch = fetch, force = false): Promise<void> {
+  const dueProfiles = await listDueDailyPlanProfiles(env, now, force);
+  if (dueProfiles.length === 0) {
     log("warn", "daily_plan_no_targets");
     return;
   }
 
-  const day = localDate(now, config.timezone);
-  const claims = await Promise.all(config.dailyPlanTargets.map(async (target) => ({
-    target,
-    claimed: await claimDailyPlanRun(env.DB, day, target.channel, target.userId, now),
+  const claims = await Promise.all(dueProfiles.map(async (profile) => ({
+    profile,
+    day: localDate(now, profile.timezone),
+    claimed: await claimDailyPlanRun(
+      env.DB,
+      localDate(now, profile.timezone),
+      profile.channel,
+      profile.userId,
+      now,
+    ),
   })));
   const pending = claims.filter((entry) => entry.claimed);
   if (pending.length === 0) return;
 
-  for (const { target } of pending) {
+  for (const { profile, day } of pending) {
+    const target = { channel: profile.channel, userId: profile.userId };
     try {
       const content = await buildDailyPlan(env, now, fetcher, target);
       const adapter = getChannelAdapter(env, target.channel, fetcher);
@@ -97,7 +153,7 @@ export async function runDailyPlan(env: Env, now = new Date(), fetcher: typeof f
   }
 }
 
-function deterministicPlan(items: Item[], now: Date, timezone: string): string {
+function deterministicPlan(items: Item[], now: Date, timezone: string, userCallName: string | null): string {
   const today = localDayBounds(now, timezone);
   const weekEnd = new Date(new Date(today.end).getTime() + 6 * 86_400_000).toISOString();
   const must: Item[] = [];
@@ -112,12 +168,27 @@ function deterministicPlan(items: Item[], now: Date, timezone: string): string {
   }
 
   const date = formatInTimeZone(now, timezone, "M/d");
-  if (items.length === 0) return `${date} 今日安排\n\n今天没有未完成事项。`;
-  const lines = [`${date} 今日安排`];
+  const heading = `${userCallName ? `${userCallName}，` : ""}${date} 今日安排`;
+  if (items.length === 0) return `${heading}\n\n今天没有未完成事项。`;
+  const lines = [heading];
   appendSection(lines, "Must", must);
   appendSection(lines, "Should", should);
   appendSection(lines, "If time", ifTime);
   return lines.slice(0, 12).join("\n");
+}
+
+function dailyPlanProfileContext(profile: UserProfile) {
+  return {
+    userCallName: profile.userCallName,
+    assistantCallName: profile.assistantCallName,
+    dailyPlanTime: profile.dailyPlanTime,
+    chronotype: profile.chronotype,
+    targetWakeTime: profile.targetWakeTime,
+    targetSleepTime: profile.targetSleepTime,
+    routineCoaching: profile.routineCoaching,
+    communicationStyle: profile.communicationStyle,
+    preferences: profile.preferences,
+  };
 }
 
 function annotateFallback(plan: string): string {

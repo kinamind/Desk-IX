@@ -25,7 +25,7 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
         : 0;
       return Response.json({
         ok: result?.ok === 1,
-        service: "Composa",
+        service: config.appName,
         version: "0.1.0",
         timezone: config.timezone,
         channels: {
