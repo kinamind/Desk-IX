@@ -51,7 +51,7 @@ async function createTask(sourceMessageId: string) {
   }, now);
 }
 
-function callbackMessage(itemId: string, name: "done" | "later", value?: string): IncomingMessage {
+function callbackMessage(itemId: string, name: "done" | "archive" | "restore" | "later", value?: string): IncomingMessage {
   return {
     channel: "telegram",
     eventId: `callback:${name}:${itemId}`,
@@ -86,5 +86,25 @@ describe("callback business actions", () => {
     expect(params?.remindAt).toBe("2026-08-15T03:00:00.000Z");
     const row = await env.DB.prepare("SELECT status, remind_at, workflow_id FROM reminders WHERE item_id = ?").bind(item.id).first();
     expect(row).toMatchObject({ status: "pending", remind_at: "2026-08-15T03:00:00.000Z" });
+  });
+
+  it("archives an item without deleting it and can restore it", async () => {
+    const item = await createTask("callback-archive");
+    const archived = await handleCallback(env, callbackMessage(item.id, "archive"), now);
+    expect(archived).toMatchObject({ acknowledgeCode: 0, itemId: item.id });
+    expect(await getItem(env.DB, item.id)).toMatchObject({ status: "archived", completedAt: null });
+
+    const restored = await handleCallback(env, callbackMessage(item.id, "restore"), now);
+    expect(restored).toMatchObject({ acknowledgeCode: 0, itemId: item.id });
+    expect(await getItem(env.DB, item.id)).toMatchObject({ status: "open", completedAt: null });
+  });
+
+  it("cannot act on another user's item", async () => {
+    const item = await createTask("callback-owner-check");
+    const incoming = callbackMessage(item.id, "done");
+    incoming.userId = "someone-else";
+    const result = await handleCallback(env, incoming, now);
+    expect(result).toMatchObject({ acknowledgeCode: 1, itemId: null });
+    expect(await getItem(env.DB, item.id)).toMatchObject({ status: "open" });
   });
 });

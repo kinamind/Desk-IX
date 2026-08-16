@@ -20,6 +20,7 @@ export interface ItemRow {
   source_channel: ChannelName;
   source_user_id: string;
   source_message_id: string;
+  source_action_index: number;
   ai_enrichment: string;
   metadata: string;
   parent_id: string | null;
@@ -78,6 +79,7 @@ export function mapItem(row: ItemRow): Item {
     sourceChannel: row.source_channel,
     sourceUserId: row.source_user_id,
     sourceMessageId: row.source_message_id,
+    sourceActionIndex: row.source_action_index,
     aiEnrichment: parseObject(row.ai_enrichment),
     metadata: parseObject(row.metadata),
     parentId: row.parent_id,

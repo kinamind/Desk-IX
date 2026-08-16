@@ -5,7 +5,8 @@ import { processIncoming } from "../core/processor";
 import { buildDailyPlan, runDailyPlan } from "../core/daily-plan";
 import { localDate } from "../core/time";
 import { getAIRequests } from "../db/ai-usage";
-import { completeItem, getItem, searchItems } from "../db/items";
+import { archiveItem, completeItem, getItem, restoreItem, searchItems } from "../db/items";
+import { cancelOpenReminders } from "../db/reminders";
 import { log } from "../observability/log";
 import { constantTimeEqual } from "../security/crypto";
 
@@ -72,6 +73,20 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
       const completeMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/complete$/i);
       if (request.method === "POST" && completeMatch?.[1]) {
         const changed = await completeItem(env.DB, completeMatch[1]);
+        await cancelOpenReminders(env.DB, completeMatch[1]);
+        return Response.json({ ok: true, changed });
+      }
+
+      const archiveMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/archive$/i);
+      if (request.method === "POST" && archiveMatch?.[1]) {
+        const changed = await archiveItem(env.DB, archiveMatch[1]);
+        await cancelOpenReminders(env.DB, archiveMatch[1]);
+        return Response.json({ ok: true, changed });
+      }
+
+      const restoreMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/restore$/i);
+      if (request.method === "POST" && restoreMatch?.[1]) {
+        const changed = await restoreItem(env.DB, restoreMatch[1]);
         return Response.json({ ok: true, changed });
       }
 

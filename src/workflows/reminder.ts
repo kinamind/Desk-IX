@@ -28,11 +28,12 @@ export class ReminderWorkflow extends WorkflowEntrypoint<Env, ReminderWorkflowPa
             {
               text: `🔔 ${delivery.item.title}`,
               buttons: [[
-                { label: "Done", action: `done:${delivery.item.id}`, style: "primary" },
-                { label: "Later", action: `later:${delivery.item.id}:1h` },
-                { label: "Reschedule", action: `reschedule:${delivery.item.id}` },
+                { label: "完成", action: `done:${delivery.item.id}`, style: "primary" },
+                { label: "稍后", action: `later:${delivery.item.id}:1h` },
+                { label: "改期", action: `reschedule:${delivery.item.id}` },
               ], [
-                { label: "Details", action: `details:${delivery.item.id}` },
+                { label: "舍弃", action: `archive:${delivery.item.id}`, style: "danger" },
+                { label: "详情", action: `details:${delivery.item.id}` },
               ]],
             },
           );

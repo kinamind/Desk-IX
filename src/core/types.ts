@@ -8,7 +8,7 @@ export const REMINDER_MODES = ["deferred_action", "pre_event", "at_deadline", "e
 export type ReminderMode = (typeof REMINDER_MODES)[number];
 
 export type ChannelName = "telegram" | "qq";
-export type MessageIntent = "create_item" | "query" | "analyze" | "help" | "clarify" | "unavailable";
+export type MessageIntent = "act" | "query" | "analyze" | "respond" | "help" | "clarify" | "unavailable";
 
 export interface Item {
   id: string;
@@ -30,6 +30,7 @@ export interface Item {
   sourceChannel: ChannelName;
   sourceUserId: string;
   sourceMessageId: string;
+  sourceActionIndex: number;
   aiEnrichment: Record<string, unknown>;
   metadata: Record<string, unknown>;
   parentId: string | null;
@@ -52,9 +53,21 @@ export interface CreateItemInput {
   sourceChannel: ChannelName;
   sourceUserId: string;
   sourceMessageId: string;
+  sourceActionIndex?: number;
   aiEnrichment?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   parentId?: string | null;
+}
+
+export interface UpdateItemInput {
+  title?: string;
+  content?: string;
+  tags?: string[];
+  priority?: Priority;
+  estimatedDuration?: number | null;
+  dueAt?: string | null;
+  startAfter?: string | null;
+  originalTimeExpression?: string | null;
 }
 
 export interface ItemSearchFilters {
@@ -67,14 +80,14 @@ export interface ItemSearchFilters {
   limit?: number;
 }
 
-export interface ParsedIntent {
-  intent: MessageIntent;
+export interface CreateItemAgentAction {
+  action: "create_item";
   type?: ItemType;
   title?: string;
   content?: string;
   url?: string | null;
   tags?: string[];
-  status?: string;
+  status?: "open" | "raw" | "active";
   priority?: Priority;
   estimatedDuration?: number | null;
   dueAt?: string | null;
@@ -82,15 +95,41 @@ export interface ParsedIntent {
   reminderMode?: ReminderMode | null;
   startAfter?: string | null;
   originalTimeExpression?: string | null;
+}
+
+export interface TargetItemAgentAction {
+  action: "complete_item" | "archive_item" | "restore_item";
+  targetItemId: string;
+}
+
+export interface UpdateItemAgentAction extends UpdateItemInput {
+  action: "update_item";
+  targetItemId: string;
+  reminderAt?: string | null;
+  reminderMode?: ReminderMode | null;
+}
+
+export type AgentAction = CreateItemAgentAction | TargetItemAgentAction | UpdateItemAgentAction;
+
+export interface ParsedIntent {
+  intent: MessageIntent;
+  actions?: AgentAction[];
   query?: ItemSearchFilters;
+  reply?: string;
   question?: string;
   confidence: number;
   source: "system" | "ai";
   aiEnrichment?: Record<string, unknown>;
 }
 
+export interface ConversationTurn {
+  user: string;
+  assistant: string;
+  receivedAt: string;
+}
+
 export interface CallbackAction {
-  name: "done" | "later" | "reschedule" | "details";
+  name: "done" | "archive" | "restore" | "later" | "reschedule" | "details";
   itemId: string;
   value?: string;
   interactionId?: string;

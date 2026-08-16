@@ -49,7 +49,7 @@ function concatBytes(left: string, right: string): Uint8Array {
 
 function parseAction(data: string, interactionId: string): CallbackAction | null {
   const [name, itemId, value] = data.split(":");
-  if (!name || !itemId || !["done", "later", "reschedule", "details"].includes(name)) return null;
+  if (!name || !itemId || !["done", "archive", "restore", "later", "reschedule", "details"].includes(name)) return null;
   return {
     name: name as CallbackAction["name"],
     itemId,
