@@ -33,6 +33,13 @@ class FakeWorkflow implements Workflow<ReminderWorkflowPayload> {
   }
 }
 
+class FailingWorkflow extends FakeWorkflow {
+  public override create(options: WorkflowInstanceCreateOptions<ReminderWorkflowPayload> = {}): Promise<WorkflowInstance> {
+    this.creates.push(options);
+    return Promise.reject(new Error("workflow unavailable"));
+  }
+}
+
 function providerFor(payload: Record<string, unknown>): AIProvider {
   return {
     generate: () => Promise.resolve({
@@ -344,5 +351,171 @@ describe("intent to business operation", () => {
     await expect(getItem(env.DB, restore.id)).resolves.toMatchObject({ status: "open" });
     expect(sentText).toContain("已舍弃");
     expect(sentText).toContain("已恢复");
+  });
+
+  it("updates an existing reminder and moves it past a busy window", async () => {
+    const now = new Date("2026-08-16T05:56:00.000Z");
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "报名 GOAIHZ",
+      content: "今天要提交完",
+      rawMessage: "等会提醒我要报名GOAIHZ，这个今天要提交完",
+      sourceChannel: "telegram",
+      sourceUserId: "42",
+      sourceMessageId: "goaihz-original",
+      dueAt: "2026-08-16T15:59:59.000Z",
+    }, now);
+    await createReminder(env.DB, {
+      itemId: item.id,
+      remindAt: "2026-08-16T06:30:00.000Z",
+      kind: "deferred_action",
+      targetChannel: "telegram",
+      targetUserId: "42",
+    }, now);
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:move-goaihz-reminder",
+      messageId: "108",
+      userId: "42",
+      text: "两点半有事，等会晚一点再提醒我",
+      timestamp: now.toISOString(),
+      eventType: "message",
+    };
+    const workflow = new FakeWorkflow();
+    const processorEnv: Env = { ...env, REMINDER_WORKFLOW: workflow };
+    let sentText = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      sentText = (JSON.parse(init.body) as { text: string }).text;
+      return Response.json({ ok: true, result: { message_id: 209 } });
+    };
+
+    await processIncoming(processorEnv, incoming, fetcher, now, providerFor({
+      intent: "act",
+      actions: [{
+        action: "set_reminder",
+        target_item_id: item.id,
+        reminder_at: "2026-08-16T06:45:00.000Z",
+        reminder_mode: "deferred_action",
+        original_time_expression: "两点半有事，晚一点提醒",
+      }],
+      avoid_windows: [{
+        start_at: "2026-08-16T06:15:00.000Z",
+        end_at: "2026-08-16T07:30:00.000Z",
+        reason: "两点半有事",
+      }],
+      confidence: 0.97,
+    }));
+
+    const reminders = await env.DB.prepare(
+      "SELECT remind_at, status FROM reminders WHERE item_id = ? ORDER BY remind_at ASC",
+    ).bind(item.id).all<{ remind_at: string; status: string }>();
+    expect(reminders.results).toEqual([
+      { remind_at: "2026-08-16T06:30:00.000Z", status: "canceled" },
+      { remind_at: "2026-08-16T07:45:00.000Z", status: "pending" },
+    ]);
+    expect(workflow.creates.at(-1)?.params?.remindAt).toBe("2026-08-16T07:45:00.000Z");
+    expect(await getItemBySource(env.DB, "telegram", incoming.eventId)).toBeNull();
+    expect(sentText).toContain("已避开日程冲突");
+  });
+
+  it("moves a new reminder past an existing scheduled item", async () => {
+    const now = new Date("2026-08-16T05:00:00.000Z");
+    await createItem(env.DB, {
+      type: "task",
+      title: "两点半会议",
+      content: "两点半有会",
+      rawMessage: "两点半有会",
+      sourceChannel: "telegram",
+      sourceUserId: "schedule-owner",
+      sourceMessageId: "busy-meeting",
+      dueAt: "2026-08-16T06:30:00.000Z",
+      estimatedDuration: 60,
+    }, now);
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:new-reminder-conflict",
+      messageId: "109",
+      userId: "schedule-owner",
+      text: "今天晚些时候提醒我提交报名",
+      timestamp: now.toISOString(),
+      eventType: "message",
+    };
+    const workflow = new FakeWorkflow();
+    const processorEnv: Env = { ...env, REMINDER_WORKFLOW: workflow };
+    let sentText = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      sentText = (JSON.parse(init.body) as { text: string }).text;
+      return Response.json({ ok: true, result: { message_id: 210 } });
+    };
+
+    await processIncoming(processorEnv, incoming, fetcher, now, providerFor({
+      intent: "act",
+      actions: [{
+        action: "create_item",
+        type: "task",
+        title: "提交报名",
+        content: incoming.text,
+        due_at: "2026-08-16T12:00:00.000Z",
+        reminder_at: "2026-08-16T06:45:00.000Z",
+        reminder_mode: "deferred_action",
+      }],
+      confidence: 0.96,
+    }));
+
+    expect(workflow.creates.at(-1)?.params?.remindAt).toBe("2026-08-16T07:45:00.000Z");
+    expect(sentText).toContain("已避开日程冲突");
+  });
+
+  it("keeps the old reminder when replacement Workflow creation fails", async () => {
+    const now = new Date("2026-08-16T05:00:00.000Z");
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "提交关键报名",
+      content: "今天提交",
+      rawMessage: "今天提交",
+      sourceChannel: "telegram",
+      sourceUserId: "workflow-failure-owner",
+      sourceMessageId: "workflow-failure-original",
+      dueAt: "2026-08-16T12:00:00.000Z",
+    }, now);
+    await createReminder(env.DB, {
+      itemId: item.id,
+      remindAt: "2026-08-16T06:00:00.000Z",
+      kind: "deferred_action",
+      targetChannel: "telegram",
+      targetUserId: "workflow-failure-owner",
+    }, now);
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:workflow-failure-replacement",
+      messageId: "110",
+      userId: "workflow-failure-owner",
+      text: "晚一点再提醒我",
+      timestamp: now.toISOString(),
+      eventType: "message",
+    };
+    const failingWorkflow = new FailingWorkflow();
+    const processorEnv: Env = { ...env, REMINDER_WORKFLOW: failingWorkflow };
+
+    await expect(processIncoming(processorEnv, incoming, async () => Response.json({ ok: true }), now, providerFor({
+      intent: "act",
+      actions: [{
+        action: "set_reminder",
+        target_item_id: item.id,
+        reminder_at: "2026-08-16T07:00:00.000Z",
+        reminder_mode: "deferred_action",
+      }],
+      confidence: 0.96,
+    }))).rejects.toThrow("workflow unavailable");
+
+    const reminders = await env.DB.prepare(
+      "SELECT remind_at, status FROM reminders WHERE item_id = ? ORDER BY remind_at ASC",
+    ).bind(item.id).all<{ remind_at: string; status: string }>();
+    expect(reminders.results).toEqual([
+      { remind_at: "2026-08-16T06:00:00.000Z", status: "pending" },
+      { remind_at: "2026-08-16T07:00:00.000Z", status: "failed" },
+    ]);
   });
 });

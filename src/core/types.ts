@@ -109,11 +109,28 @@ export interface UpdateItemAgentAction extends UpdateItemInput {
   reminderMode?: ReminderMode | null;
 }
 
-export type AgentAction = CreateItemAgentAction | TargetItemAgentAction | UpdateItemAgentAction;
+export interface SetReminderAgentAction {
+  action: "set_reminder";
+  targetItemId: string;
+  reminderAt: string | null;
+  reminderMode: ReminderMode | null;
+  originalTimeExpression?: string | null;
+}
+
+export interface ScheduleWindow {
+  itemId: string | null;
+  title: string;
+  startAt: string;
+  endAt: string;
+  source: "item" | "reminder" | "message";
+}
+
+export type AgentAction = CreateItemAgentAction | TargetItemAgentAction | UpdateItemAgentAction | SetReminderAgentAction;
 
 export interface ParsedIntent {
   intent: MessageIntent;
   actions?: AgentAction[];
+  avoidWindows?: ScheduleWindow[];
   query?: ItemSearchFilters;
   reply?: string;
   question?: string;

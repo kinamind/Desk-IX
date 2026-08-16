@@ -114,11 +114,12 @@ export async function markReminderTriggered(
   `).bind(now.toISOString(), JSON.stringify(receipt), id).run();
 }
 
-export async function cancelOpenReminders(db: D1Database, itemId: string): Promise<void> {
+export async function cancelOpenReminders(db: D1Database, itemId: string, exceptReminderId: string | null = null): Promise<void> {
   await db.prepare(`
     UPDATE reminders SET status = 'canceled'
     WHERE item_id = ? AND status IN ('pending', 'delivering')
-  `).bind(itemId).run();
+      AND (? IS NULL OR id <> ?)
+  `).bind(itemId, exceptReminderId, exceptReminderId).run();
 }
 
 export async function markReminderFailed(db: D1Database, id: string, error: string): Promise<void> {

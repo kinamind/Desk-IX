@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { archiveItem, createItem, completeItem, getItem, listAgentContextItems, restoreItem, searchItems, searchOwnedItems, updateItem } from "../src/db/items";
 import { claimMessage, failMessage } from "../src/db/messages";
 import { createReminder, markReminderFailed } from "../src/db/reminders";
+import { listScheduleWindows } from "../src/db/schedule";
 import type { IncomingMessage } from "../src/core/types";
 
 const now = new Date("2026-08-15T02:00:00.000Z");
@@ -121,5 +122,83 @@ describe("D1 repositories", () => {
     await expect(archiveItem(env.DB, item.id, now)).resolves.toBe(true);
     await expect(restoreItem(env.DB, item.id, now)).resolves.toBe(true);
     await expect(getItem(env.DB, item.id)).resolves.toMatchObject({ title: "新标题", status: "open", dueAt: "2026-08-18T02:00:00.000Z" });
+  });
+
+  it("builds a user-scoped schedule from item times and pending reminders", async () => {
+    const meeting = await createItem(env.DB, {
+      type: "task",
+      title: "下午会议",
+      content: "下午会议",
+      rawMessage: "下午会议",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "schedule-meeting",
+      dueAt: "2026-08-15T06:30:00.000Z",
+      estimatedDuration: 60,
+    }, now);
+    const task = await createItem(env.DB, {
+      type: "task",
+      title: "提交申请",
+      content: "提交申请",
+      rawMessage: "提交申请",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "schedule-reminder",
+      dueAt: "2026-08-16T12:00:00.000Z",
+    }, now);
+    await createReminder(env.DB, {
+      itemId: task.id,
+      remindAt: "2026-08-15T05:00:00.000Z",
+      kind: "deferred_action",
+      targetChannel: "qq",
+      targetUserId: "me",
+    }, now);
+    await createItem(env.DB, {
+      type: "task",
+      title: "别人的会议",
+      content: "别人的会议",
+      rawMessage: "别人的会议",
+      sourceChannel: "qq",
+      sourceUserId: "other",
+      sourceMessageId: "schedule-other",
+      dueAt: "2026-08-15T06:30:00.000Z",
+    }, now);
+    const ongoing = await createItem(env.DB, {
+      type: "task",
+      title: "正在进行的讨论",
+      content: "1:30 开始，持续一小时",
+      rawMessage: "1:30 开始，持续一小时",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "schedule-ongoing",
+      dueAt: "2026-08-15T01:30:00.000Z",
+      estimatedDuration: 60,
+    }, now);
+
+    const windows = await listScheduleWindows(env.DB, "qq", "me", now);
+    expect(windows).toEqual(expect.arrayContaining([
+      {
+        itemId: meeting.id,
+        title: "下午会议",
+        startAt: "2026-08-15T06:15:00.000Z",
+        endAt: "2026-08-15T07:30:00.000Z",
+        source: "item",
+      },
+      {
+        itemId: task.id,
+        title: "提交申请（提醒）",
+        startAt: "2026-08-15T05:00:00.000Z",
+        endAt: "2026-08-15T05:15:00.000Z",
+        source: "reminder",
+      },
+      {
+        itemId: ongoing.id,
+        title: "正在进行的讨论",
+        startAt: "2026-08-15T01:15:00.000Z",
+        endAt: "2026-08-15T02:30:00.000Z",
+        source: "item",
+      },
+    ]));
+    expect(windows.some((window) => window.title === "别人的会议")).toBe(false);
   });
 });

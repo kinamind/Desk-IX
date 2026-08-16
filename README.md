@@ -20,6 +20,7 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 - AI-first 自然语言理解：中文数字、口语时间、事项时间与提醒时间由模型统一解释
 - 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
+- 新建或改动提醒时读取该用户在 Composa 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
 - Cloudflare Workflows 一次性提醒与少量 deadline milestones
 - Cron 驱动、D1 事实驱动的简洁 Daily Plan
 - `完成`、`舍弃`、`稍后`、`改期`、`详情` 交互按钮；舍弃只归档，可随时恢复
@@ -129,7 +130,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖带上下文的行动规划、自然语言完成/舍弃/恢复/修改、多动作、聊天不落库、延后提醒策略、CRUD、重复 webhook、Workflow 调度、callback、时区、Telegram/QQ 授权、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖带上下文的行动规划、自然语言完成/舍弃/恢复/修改、多动作、聊天不落库、延后提醒与日程避让、CRUD、重复 webhook、Workflow 调度、callback、时区、Telegram/QQ 授权、QQ 卡片 URL、网页阅读、查询和 Daily Plan。
 
 ## 项目结构
 
@@ -151,4 +152,4 @@ scripts/          webhook、smoke test、备份脚本
 
 ## MVP 边界
 
-Vectorize、Google Calendar、WhatsApp/企业微信、订阅制模型 runtime、网页 UI 与复杂 RAG 都不阻塞当前版本。`embedding_id` 已预留，但没有 Vectorize 时全部核心能力仍然可用。
+当前的“日程”来自 Composa 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。Vectorize、外部 Calendar、WhatsApp/企业微信、订阅制模型 runtime、网页 UI 与复杂 RAG 都不阻塞当前版本。`embedding_id` 已预留，但没有 Vectorize 时全部核心能力仍然可用。

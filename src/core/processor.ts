@@ -22,11 +22,13 @@ import {
 import { failMessage, finishMessage, claimMessage, listRecentConversation } from "../db/messages";
 import { setPendingAction, takePendingAction } from "../db/pending-actions";
 import { cancelOpenReminders } from "../db/reminders";
+import { listScheduleWindows } from "../db/schedule";
 import { discoverUrls, readWebPage } from "../url/reader";
 import { handleCallback } from "./callbacks";
 import { generateDeadlineMilestones } from "./milestones";
 import { scheduleReminder } from "./reminder-service";
-import type { CreateItemAgentAction, IncomingMessage, Item, OutgoingMessage, ParsedIntent, ReminderMode } from "./types";
+import { findAvailableReminderTime } from "./schedule";
+import type { CreateItemAgentAction, IncomingMessage, Item, OutgoingMessage, ParsedIntent, ReminderMode, ScheduleWindow } from "./types";
 import { log } from "../observability/log";
 
 const urlEnrichmentSchema = z.object({
@@ -75,33 +77,45 @@ export async function processIncoming(
         const item = await getOwnedItem(env.DB, pending.itemId, incoming.channel, incoming.userId);
         if (!item) throw new Error("Pending reschedule item no longer exists");
         const schedule = await resolveScheduleChange(incoming.text, { title: item.title, dueAt: item.dueAt }, provider, now, config.timezone);
-        if (schedule.question || !schedule.reminderAt) {
+        const scheduleWindows = await listScheduleWindows(env.DB, incoming.channel, incoming.userId, now);
+        const availability = schedule.reminderAt ? findAvailableReminderTime(schedule.reminderAt, {
+          now,
+          dueAt: schedule.dueAt ?? item.dueAt,
+          targetItemId: item.id,
+          schedule: scheduleWindows,
+          avoidWindows: schedule.avoidWindows,
+        }) : null;
+        if (schedule.question || !schedule.reminderAt || !availability?.reminderAt) {
           await setPendingAction(env.DB, {
             channel: pending.channel,
             userId: pending.userId,
             action: pending.action,
             itemId: pending.itemId,
           }, now);
-          output = { text: schedule.question ?? "我还不能确定新时间，能再说具体一点吗？" };
+          output = { text: schedule.question ?? "截止前没有找到合适的空闲时间，原提醒没有修改。" };
           itemId = pending.itemId;
         } else {
           const dueAt = schedule.dueAt ?? schedule.reminderAt;
           await updateItemSchedule(env.DB, item.id, dueAt, schedule.originalTimeExpression ?? incoming.text.slice(0, 200), now);
-          await cancelOpenReminders(env.DB, item.id);
-          await scheduleReminder(env, {
+          const replacement = await scheduleReminder(env, {
             itemId: item.id,
-            remindAt: schedule.reminderAt,
+            remindAt: availability.reminderAt,
             kind: "rescheduled",
             target: { channel: incoming.channel, userId: incoming.userId },
           }, now);
-          output = { text: formatScheduleConfirmation(item.title, dueAt, schedule.reminderAt, config.timezone, "已改好", schedule.reminderMode) };
+          await cancelOpenReminders(env.DB, item.id, replacement.id);
+          output = {
+            text: formatScheduleConfirmation(item.title, dueAt, availability.reminderAt, config.timezone, "已改好", schedule.reminderMode)
+              + adjustmentSuffix(availability.adjusted),
+          };
           itemId = item.id;
         }
       } else {
         const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId);
         const conversation = await listRecentConversation(env.DB, incoming.channel, incoming.userId);
-        const intent = await routeMessage(incoming.text, provider, now, config.timezone, contextItems, conversation);
-        const result = await executeIntent(env, incoming, intent, provider, fetcher, now);
+        const schedule = await listScheduleWindows(env.DB, incoming.channel, incoming.userId, now);
+        const intent = await routeMessage(incoming.text, provider, now, config.timezone, contextItems, conversation, schedule);
+        const result = await executeIntent(env, incoming, intent, provider, fetcher, now, schedule);
         output = result.output;
         itemId = result.itemId;
       }
@@ -127,6 +141,7 @@ async function executeIntent(
   provider: AIProvider | null,
   fetcher: typeof fetch,
   now: Date,
+  schedule: ScheduleWindow[],
 ): Promise<{ output: OutgoingMessage; itemId: string | null }> {
   const config = getConfig(env);
   if (intent.intent === "clarify" || intent.intent === "unavailable") {
@@ -214,9 +229,21 @@ async function executeIntent(
   let resultItemId: string | null = null;
   for (const [actionIndex, action] of intent.actions.entries()) {
     if (action.action === "create_item") {
-      const result = await executeCreateAction(env, incoming, action, actionIndex, intent.aiEnrichment ?? {}, provider, fetcher, now);
+      const result = await executeCreateAction(
+        env,
+        incoming,
+        action,
+        actionIndex,
+        intent.aiEnrichment ?? {},
+        provider,
+        fetcher,
+        now,
+        schedule,
+        intent.avoidWindows ?? [],
+      );
       confirmations.push(result.text);
       resultItemId ??= result.item.id;
+      if (result.reminderAt) schedule.push(reminderWindow(result.item, result.reminderAt));
       continue;
     }
 
@@ -242,24 +269,85 @@ async function executeIntent(
       continue;
     }
 
+    if (action.action === "set_reminder") {
+      if (action.reminderMode === "none") {
+        await cancelOpenReminders(env.DB, item.id);
+        confirmations.push(`✓ 已取消提醒：${item.title}`);
+        continue;
+      }
+      if (action.reminderMode === "explicit_now") {
+        await cancelOpenReminders(env.DB, item.id);
+        confirmations.push(`🔔 ${item.title}`);
+        continue;
+      }
+      if (!action.reminderAt) {
+        confirmations.push(`原提醒没有修改：${item.title}`);
+        continue;
+      }
+      const availability = findAvailableReminderTime(action.reminderAt, {
+        now,
+        dueAt: item.dueAt,
+        targetItemId: item.id,
+        schedule,
+        avoidWindows: intent.avoidWindows ?? [],
+      });
+      if (!availability.reminderAt) {
+        confirmations.push(`截止前没有找到合适的空闲时间，原提醒没有修改：${item.title}`);
+        continue;
+      }
+      const replacement = await scheduleReminder(env, {
+        itemId: item.id,
+        remindAt: availability.reminderAt,
+        kind: action.reminderMode ?? "updated",
+        target: { channel: incoming.channel, userId: incoming.userId },
+      }, now);
+      await cancelOpenReminders(env.DB, item.id, replacement.id);
+      schedule.push(reminderWindow(item, availability.reminderAt));
+      confirmations.push(
+        formatScheduleConfirmation(item.title, item.dueAt, availability.reminderAt, config.timezone, "已更新", action.reminderMode)
+          + adjustmentSuffix(availability.adjusted),
+      );
+      continue;
+    }
+
     if (action.action !== "update_item") throw new Error("Unsupported agent action");
     const { reminderAt, reminderMode } = action;
+    let selectedUpdateReminderAt = reminderAt ?? null;
+    let updateReminderAdjusted = false;
     await updateItem(env.DB, item.id, action, now);
     const changesReminder = Object.hasOwn(action, "reminderAt") || Object.hasOwn(action, "reminderMode");
     if (changesReminder) {
-      await cancelOpenReminders(env.DB, item.id);
       if (reminderAt) {
-        await scheduleReminder(env, {
+        const updatedDueAt = action.dueAt !== undefined ? action.dueAt : item.dueAt;
+        const availability = findAvailableReminderTime(reminderAt, {
+          now,
+          dueAt: updatedDueAt,
+          targetItemId: item.id,
+          schedule,
+          avoidWindows: intent.avoidWindows ?? [],
+        });
+        if (!availability.reminderAt) {
+          confirmations.push(`事项已更新，但截止前没有空闲提醒时间：${item.title}`);
+          continue;
+        }
+        selectedUpdateReminderAt = availability.reminderAt;
+        updateReminderAdjusted = availability.adjusted;
+        const replacement = await scheduleReminder(env, {
           itemId: item.id,
-          remindAt: reminderAt,
+          remindAt: availability.reminderAt,
           kind: reminderMode ?? "updated",
           target: { channel: incoming.channel, userId: incoming.userId },
         }, now);
+        await cancelOpenReminders(env.DB, item.id, replacement.id);
+        schedule.push(reminderWindow(item, availability.reminderAt));
+      } else {
+        await cancelOpenReminders(env.DB, item.id);
       }
     }
     const updated = await getItem(env.DB, item.id) ?? item;
-    confirmations.push(reminderAt
-      ? formatScheduleConfirmation(updated.title, updated.dueAt, reminderAt, config.timezone, "已更新", reminderMode)
+    confirmations.push(selectedUpdateReminderAt
+      ? formatScheduleConfirmation(updated.title, updated.dueAt, selectedUpdateReminderAt, config.timezone, "已更新", reminderMode)
+        + adjustmentSuffix(updateReminderAdjusted)
       : `✓ 已更新：${updated.title}`);
   }
 
@@ -275,7 +363,9 @@ async function executeCreateAction(
   provider: AIProvider | null,
   fetcher: typeof fetch,
   now: Date,
-): Promise<{ text: string; item: Item }> {
+  schedule: ScheduleWindow[],
+  avoidWindows: ScheduleWindow[],
+): Promise<{ text: string; item: Item; reminderAt: string | null }> {
   const config = getConfig(env);
   const discoveredUrl = action.url ?? discoverUrls(incoming.text, 1)[0] ?? null;
   const type = action.type ?? (discoveredUrl ? "resource" : "note");
@@ -343,26 +433,64 @@ async function executeCreateAction(
     }
   }
 
+  let selectedReminderAt: string | null = null;
+  let reminderAdjusted = false;
   if (action.reminderAt) {
+    const availability = findAvailableReminderTime(action.reminderAt, {
+      now,
+      dueAt: item.dueAt,
+      targetItemId: item.id,
+      schedule,
+      avoidWindows,
+    });
+    selectedReminderAt = availability.reminderAt;
+    reminderAdjusted = availability.adjusted;
+  }
+  if (selectedReminderAt) {
     await scheduleReminder(env, {
       itemId: item.id,
-      remindAt: action.reminderAt,
+      remindAt: selectedReminderAt,
       kind: action.reminderMode ?? "reminder",
       target: { channel: incoming.channel, userId: incoming.userId },
     }, now);
   }
   if (type === "project" && item.dueAt) {
     for (const milestone of generateDeadlineMilestones(item.dueAt, now)) {
+      const availability = findAvailableReminderTime(milestone.remindAt, {
+        now,
+        dueAt: item.dueAt,
+        targetItemId: item.id,
+        schedule,
+        avoidWindows,
+      });
+      if (!availability.reminderAt) continue;
       await scheduleReminder(env, {
         itemId: item.id,
-        remindAt: milestone.remindAt,
+        remindAt: availability.reminderAt,
         kind: `milestone-${milestone.label}`,
         target: { channel: incoming.channel, userId: incoming.userId },
       }, now);
+      schedule.push(reminderWindow(item, availability.reminderAt));
     }
   }
 
-  return { text: confirmation(item, action.reminderAt, action.reminderMode, urlFetchFailed, config.timezone), item };
+  const text = confirmation(item, selectedReminderAt, action.reminderMode, urlFetchFailed, config.timezone)
+    + adjustmentSuffix(reminderAdjusted);
+  return { text, item, reminderAt: selectedReminderAt };
+}
+
+function reminderWindow(item: Item, reminderAt: string): ScheduleWindow {
+  return {
+    itemId: item.id,
+    title: `${item.title}（提醒）`,
+    startAt: reminderAt,
+    endAt: new Date(new Date(reminderAt).getTime() + 15 * 60_000).toISOString(),
+    source: "reminder",
+  };
+}
+
+function adjustmentSuffix(adjusted: boolean): string {
+  return adjusted ? "\n已避开日程冲突。" : "";
 }
 
 function confirmation(item: Item, reminderAt: string | null | undefined, reminderMode: ReminderMode | null | undefined, urlFetchFailed: boolean, timezone: string): string {

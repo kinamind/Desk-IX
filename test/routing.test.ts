@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { routeMessage } from "../src/ai/intent";
+import { resolveScheduleChange, routeMessage } from "../src/ai/intent";
 import type { AIProvider } from "../src/ai/provider";
+import type { Item, ScheduleWindow } from "../src/core/types";
 import { generateDeadlineMilestones } from "../src/core/milestones";
 
 const now = new Date("2026-08-15T04:30:00.000Z");
@@ -117,6 +118,112 @@ describe("AI-first routing", () => {
     const calls: string[] = [];
     await expect(routeMessage("/help", jsonProvider({}, calls), now)).resolves.toMatchObject({ intent: "help", source: "system" });
     expect(calls).toHaveLength(0);
+  });
+
+  it("uses a first-class reminder action and receives structured schedule context", async () => {
+    const scenarioNow = new Date("2026-08-16T05:56:00.000Z");
+    const item: Item = {
+      id: "36800049-3596-429d-9fb4-08d8df9bb637",
+      type: "task",
+      title: "报名 GOAIHZ",
+      content: "今天要提交完",
+      rawMessage: "等会提醒我要报名GOAIHZ，这个今天要提交完",
+      url: null,
+      tags: [],
+      status: "open",
+      priority: "normal",
+      estimatedDuration: null,
+      createdAt: scenarioNow.toISOString(),
+      updatedAt: scenarioNow.toISOString(),
+      completedAt: null,
+      dueAt: "2026-08-16T15:59:59.000Z",
+      startAfter: null,
+      originalTimeExpression: "等会提醒，今天要提交完",
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "goaihz",
+      sourceActionIndex: 0,
+      aiEnrichment: {},
+      metadata: {},
+      parentId: null,
+      embeddingId: null,
+    };
+    const schedule: ScheduleWindow[] = [{
+      itemId: item.id,
+      title: "报名 GOAIHZ（提醒）",
+      startAt: "2026-08-16T06:30:00.000Z",
+      endAt: "2026-08-16T06:45:00.000Z",
+      source: "reminder",
+    }];
+    const calls: string[] = [];
+    const intent = await routeMessage("两点半有事，等会晚一点再提醒我", jsonProvider({
+      intent: "act",
+      actions: [{
+        action: "set_reminder",
+        target_item_id: item.id,
+        reminder_at: "2026-08-16T07:45:00.000Z",
+        reminder_mode: "deferred_action",
+        original_time_expression: "两点半有事，晚一点提醒",
+      }],
+      avoid_windows: [{
+        start_at: "2026-08-16T06:15:00.000Z",
+        end_at: "2026-08-16T07:30:00.000Z",
+        reason: "两点半有事",
+      }],
+      confidence: 0.97,
+    }, calls), scenarioNow, "Asia/Singapore", [item], [], schedule);
+
+    expect(intent).toMatchObject({
+      intent: "act",
+      actions: [{
+        action: "set_reminder",
+        targetItemId: item.id,
+        reminderAt: "2026-08-16T07:45:00.000Z",
+        reminderMode: "deferred_action",
+      }],
+      avoidWindows: [{
+        itemId: null,
+        title: "两点半有事",
+        startAt: "2026-08-16T06:15:00.000Z",
+        endAt: "2026-08-16T07:30:00.000Z",
+        source: "message",
+      }],
+    });
+    expect(calls[0]).toContain("schedule");
+    expect(calls[0]).toContain("current_reminder_at");
+    expect(calls[0]).toContain("2026-08-16T06:30:00.000Z");
+  });
+
+  it("keeps newly disclosed busy time when resolving a card reschedule", async () => {
+    const scenarioNow = new Date("2026-08-16T05:56:00.000Z");
+    const resolution = await resolveScheduleChange(
+      "两点半有事，等会晚一点再提醒我",
+      { title: "报名 GOAIHZ", dueAt: "2026-08-16T15:59:59.000Z" },
+      jsonProvider({
+        due_at: null,
+        reminder_at: "2026-08-16T07:45:00.000Z",
+        reminder_mode: "deferred_action",
+        original_time_expression: "两点半有事，晚一点提醒",
+        avoid_windows: [{
+          start_at: "2026-08-16T06:15:00.000Z",
+          end_at: "2026-08-16T07:30:00.000Z",
+          reason: "两点半有事",
+        }],
+        clarification_question: null,
+      }, []),
+      scenarioNow,
+      "Asia/Singapore",
+    );
+
+    expect(resolution).toMatchObject({
+      reminderAt: "2026-08-16T07:45:00.000Z",
+      avoidWindows: [{
+        title: "两点半有事",
+        startAt: "2026-08-16T06:15:00.000Z",
+        endAt: "2026-08-16T07:30:00.000Z",
+      }],
+      question: null,
+    });
   });
 });
 
