@@ -31,4 +31,19 @@ describe("HTTP router", () => {
     expect(authorized.status).toBe(200);
     await expect(authorized.json()).resolves.toEqual({ items: [] });
   });
+
+  it("accepts QQ challenges through the stable /desk route", async () => {
+    const ctx = createExecutionContext();
+    const response = await routeRequest(new Request("https://kinamind.org/desk/webhooks/qq", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bot-Appid": "test-app",
+      },
+      body: JSON.stringify({ op: 13, d: { plain_token: "desk-route", event_ts: "1786894200" } }),
+    }), env, ctx);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ plain_token: "desk-route" });
+  });
 });

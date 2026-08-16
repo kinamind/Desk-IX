@@ -50,7 +50,7 @@ npx wrangler tail composa --format pretty
 在 QQ 开放平台设置 HTTPS 回调：
 
 ```text
-https://desk-ix.kinamind.org/webhooks/qq
+https://kinamind.org/desk/webhooks/qq
 ```
 
 平台会发送 `op=13` 验证请求。Desk-IX 会：

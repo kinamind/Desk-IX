@@ -8,8 +8,12 @@
   "keep_vars": true,
   "routes": [
     {
-      "pattern": "desk-ix.kinamind.org",
+      "pattern": "desk.kinamind.org",
       "custom_domain": true
+    },
+    {
+      "pattern": "kinamind.org/desk/*",
+      "zone_name": "kinamind.org"
     }
   ],
   "vars": {

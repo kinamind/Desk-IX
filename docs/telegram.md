@@ -36,13 +36,13 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 Webhook 地址是：
 
 ```text
-https://desk-ix.kinamind.org/webhooks/telegram
+https://desk.kinamind.org/webhooks/telegram
 ```
 
 脚本从环境变量读取 token/secret，不会把它们打印到输出。为避免 shell history 留下明文，可交互读取：
 
 ```bash
-export DESK_IX_URL="https://desk-ix.kinamind.org"
+export DESK_IX_URL="https://desk.kinamind.org"
 read -s TELEGRAM_BOT_TOKEN && export TELEGRAM_BOT_TOKEN
 read -s TELEGRAM_WEBHOOK_SECRET && export TELEGRAM_WEBHOOK_SECRET
 npm run telegram:webhook

@@ -4,7 +4,7 @@
 
 **Goal:** Turn the existing daily-plan cron into a profile-driven proactive assistant, give Desk-IX a stable persona and configurable forms of address, timezone, schedule, and sleep-routine preferences, and migrate the public brand without losing the existing bot or Durable Object state.
 
-**Architecture:** D1 remains the authoritative cross-runtime store. A new `user_profiles` table is keyed by channel and user ID; ordinary messages ensure a profile exists, every Think turn receives its profile as context, and profile changes are made through one scoped Agent action. The 15-minute UTC Cron remains a cheap dispatcher, but selects each enabled profile using that profile's IANA timezone and preferred plan time. `desk-ix.kinamind.org` becomes the sole public address while internal Worker/Durable Object identifiers remain unchanged to preserve state.
+**Architecture:** D1 remains the authoritative cross-runtime store. A new `user_profiles` table is keyed by channel and user ID; ordinary messages ensure a profile exists, every Think turn receives its profile as context, and profile changes are made through one scoped Agent action. The 15-minute UTC Cron remains a cheap dispatcher, but selects each enabled profile using that profile's IANA timezone and preferred plan time. `desk.kinamind.org` becomes the sole public address while internal Worker/Durable Object identifiers remain unchanged to preserve state.
 
 **Tech Stack:** TypeScript, Cloudflare Workers, Cloudflare Think/Agents SDK, D1 SQLite, Cron Triggers, Vitest Workers pool, Wrangler, GitHub CLI.
 
@@ -191,7 +191,7 @@ Replace the custom domain directly because the owner will update the QQ bot call
 
 ```jsonc
 "routes": [
-  { "pattern": "desk-ix.kinamind.org", "custom_domain": true }
+  { "pattern": "desk.kinamind.org", "custom_domain": true }
 ]
 ```
 

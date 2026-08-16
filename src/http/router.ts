@@ -15,8 +15,9 @@ const itemTypeSchema = z.enum(["resource", "idea", "task", "note", "project"]);
 
 export async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
+  const path = url.pathname.startsWith("/desk/") ? url.pathname.slice("/desk".length) : url.pathname;
   try {
-    if (request.method === "GET" && url.pathname === "/health") {
+    if (request.method === "GET" && path === "/health") {
       const result = await env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
       const config = getConfig(env);
       const aiConfigured = isAIEnabled(env);
@@ -36,8 +37,8 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
       });
     }
 
-    if (request.method === "POST" && (url.pathname === "/webhooks/telegram" || url.pathname === "/webhooks/qq")) {
-      const channel = url.pathname.endsWith("telegram") ? "telegram" : "qq";
+    if (request.method === "POST" && (path === "/webhooks/telegram" || path === "/webhooks/qq")) {
+      const channel = path.endsWith("telegram") ? "telegram" : "qq";
       const adapter = getChannelAdapter(env, channel);
       const parsed = await adapter.parseWebhook(request);
       if (parsed.kind === "unauthorized") return Response.json({ error: "Forbidden" }, { status: 403 });
@@ -49,11 +50,11 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
       return Response.json({ ok: true });
     }
 
-    if (url.pathname.startsWith("/api/")) {
+    if (path.startsWith("/api/")) {
       const authorized = await authorizeAdmin(request, env.ADMIN_API_TOKEN);
       if (!authorized) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-      if (request.method === "GET" && url.pathname === "/api/items") {
+      if (request.method === "GET" && path === "/api/items") {
         const typeParam = url.searchParams.get("type");
         const type = typeParam ? itemTypeSchema.parse(typeParam) : undefined;
         const keyword = url.searchParams.get("q")?.trim() || undefined;
@@ -67,33 +68,33 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
         return Response.json({ items });
       }
 
-      const itemMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)$/i);
+      const itemMatch = path.match(/^\/api\/items\/([0-9a-f-]+)$/i);
       if (request.method === "GET" && itemMatch?.[1]) {
         const item = await getItem(env.DB, itemMatch[1]);
         return item ? Response.json({ item }) : Response.json({ error: "Not found" }, { status: 404 });
       }
 
-      const completeMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/complete$/i);
+      const completeMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/complete$/i);
       if (request.method === "POST" && completeMatch?.[1]) {
         const changed = await completeItem(env.DB, completeMatch[1]);
         await cancelOpenReminders(env.DB, completeMatch[1]);
         return Response.json({ ok: true, changed });
       }
 
-      const archiveMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/archive$/i);
+      const archiveMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/archive$/i);
       if (request.method === "POST" && archiveMatch?.[1]) {
         const changed = await archiveItem(env.DB, archiveMatch[1]);
         await cancelOpenReminders(env.DB, archiveMatch[1]);
         return Response.json({ ok: true, changed });
       }
 
-      const restoreMatch = url.pathname.match(/^\/api\/items\/([0-9a-f-]+)\/restore$/i);
+      const restoreMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/restore$/i);
       if (request.method === "POST" && restoreMatch?.[1]) {
         const changed = await restoreItem(env.DB, restoreMatch[1]);
         return Response.json({ ok: true, changed });
       }
 
-      if (request.method === "POST" && url.pathname === "/api/daily-plan") {
+      if (request.method === "POST" && path === "/api/daily-plan") {
         if (url.searchParams.get("send") === "1") {
           ctx.waitUntil(runDailyPlan(env, new Date(), fetch, true));
           return Response.json({ ok: true, queued: true }, { status: 202 });

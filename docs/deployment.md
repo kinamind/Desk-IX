@@ -79,7 +79,7 @@ npx wrangler secret put QQ_APP_SECRET
 Secret 更新后检查部署与健康状态：
 
 ```bash
-export DESK_IX_URL="https://desk-ix.kinamind.org"
+export DESK_IX_URL="https://desk.kinamind.org"
 npm run smoke
 ```
 
