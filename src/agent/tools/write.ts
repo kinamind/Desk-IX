@@ -62,17 +62,22 @@ const transitionSchema = z.object({
   transition: z.enum(["complete", "abandon", "archive", "restore"]),
 });
 
-const reminderSchema = z.discriminatedUnion("operation", [
-  z.object({ operation: z.literal("cancel"), itemId: z.string().uuid() }),
-  z.object({
-    operation: z.enum(["set", "reschedule"]),
-    itemId: z.string().uuid(),
-    remindAt: z.string().datetime(),
-    kind: z.string().trim().min(1).max(80).default("reminder"),
-    allowConflict: z.boolean().default(false),
-    explicitImmediate: z.boolean().default(false),
-  }),
-]);
+export const reminderInputSchema = z.object({
+  operation: z.enum(["set", "reschedule", "cancel"]),
+  itemId: z.string().uuid(),
+  remindAt: z.string().datetime().optional(),
+  kind: z.string().trim().min(1).max(80).default("reminder"),
+  allowConflict: z.boolean().default(false),
+  explicitImmediate: z.boolean().default(false),
+}).superRefine((input, context) => {
+  if (input.operation !== "cancel" && !input.remindAt) {
+    context.addIssue({
+      code: "custom",
+      path: ["remindAt"],
+      message: "remindAt is required when setting or rescheduling a reminder",
+    });
+  }
+});
 
 export async function createOwnedItem(
   env: Env,
@@ -166,7 +171,7 @@ function overlaps(leftStart: number, leftEnd: number, rightStart: number, rightE
 export async function manageOwnedReminder(
   env: Env,
   principal: AgentPrincipal,
-  input: z.infer<typeof reminderSchema>,
+  input: z.infer<typeof reminderInputSchema>,
 ) {
   const item = await getOwnedItem(env.DB, input.itemId, principal.channel, principal.userId);
   if (!item) throw new Error("Item not found in the current user's memory");
@@ -176,6 +181,7 @@ export async function manageOwnedReminder(
     return { canceled: true, itemId: item.id };
   }
 
+  if (!input.remindAt) throw new Error("Reminder time is required");
   const remindAt = new Date(input.remindAt);
   if (Number.isNaN(remindAt.getTime())) throw new Error("Invalid reminder time");
   if (!input.explicitImmediate && remindAt.getTime() < Date.now() + 15 * 60_000) {
@@ -244,7 +250,7 @@ export function createWriteActions(env: Env, principal: PrincipalProvider) {
     }),
     reminder_manage: action({
       description: "Set, reschedule, or cancel a reminder for an existing item. For a time you choose, call schedule_list first and avoid conflicts. Use a useful future time for deferred work; explicitImmediate is only for an explicit user request to remind now.",
-      inputSchema: reminderSchema,
+      inputSchema: reminderInputSchema,
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
       execute: (input) => manageOwnedReminder(env, principal(), input),

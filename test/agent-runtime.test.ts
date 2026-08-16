@@ -1,7 +1,9 @@
 import { env } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { parseTurnPrincipal, stampTurnPrincipal, type AgentPrincipal } from "../src/agent/context";
+import { reminderInputSchema } from "../src/agent/tools/write";
 
 describe("ComposaAgent runtime", () => {
   it("uses a bounded, queued Think runtime without broad tools", async () => {
@@ -35,5 +37,9 @@ describe("ComposaAgent runtime", () => {
       parts: [{ type: "text", text: "更新刚才的记录" }],
     }, principal);
     expect(parseTurnPrincipal(message.metadata.turnMetadata)).toEqual(principal);
+  });
+
+  it("exposes an OpenAI-compatible object schema for reminder management", () => {
+    expect(z.toJSONSchema(reminderInputSchema)).toMatchObject({ type: "object" });
   });
 });
