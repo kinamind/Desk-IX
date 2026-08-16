@@ -1,0 +1,14 @@
+{"id":"E01","source_id":"S01","claim":"An agent run is serialized per session and covers intake, context assembly, inference, tool execution, streaming, and persistence.","location":"overview and queueing sections"}
+{"id":"E02","source_id":"S02","claim":"The runtime consumes native toolCall blocks, executes tools, appends tool results, and continues model inference.","location":"agent loop implementation"}
+{"id":"E03","source_id":"S05","claim":"Session state is keyed and persisted as the runtime record of a conversation.","location":"session keys and persistence"}
+{"id":"E04","source_id":"S06","claim":"Memory is retrieved on demand through dedicated memory search/get tools.","location":"memory tools"}
+{"id":"E05","source_id":"S07","claim":"Tools have schemas and runtime policy enforcement outside the prompt.","location":"tool model and policy"}
+{"id":"E06","source_id":"S08","claim":"Repeated and unproductive tool calls are detected and bounded.","location":"loop detection patterns"}
+{"id":"E07","source_id":"S04","claim":"Stable identity, tools, workspace context, and runtime context are assembled as distinct prompt concerns.","location":"system prompt composition"}
+{"id":"E08","source_id":"S09","claim":"Structured runtime logging is an operational interface for gateway and agent events.","location":"logging overview"}
+{"id":"E09","source_id":"S11","claim":"Think runs multi-step model/tool loops and persists them with an agent runtime.","location":"overview"}
+{"id":"E10","source_id":"S12","claim":"Programmatic submissions provide durable idempotent FIFO processing suited to webhook-originated work.","location":"submission semantics"}
+{"id":"E11","source_id":"S13","claim":"Actions provide durable idempotency and structured failures for side effects.","location":"action guarantees"}
+{"id":"E12","source_id":"S14","claim":"Cloudflare Agent sessions use Durable Object storage for persisted message state.","location":"session architecture"}
+{"id":"E13","source_id":"S15","claim":"Lifecycle hooks expose turn and response boundaries needed for recovery and delivery integration.","location":"hook reference"}
+{"id":"E14","source_id":"S16","claim":"Model and tool spans can be traced while message and tool payload storage remains configurable.","location":"tracing configuration"}

@@ -33,6 +33,20 @@
       "migrations_dir": "migrations"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COMPOSA_AGENT",
+        "class_name": "ComposaAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ComposaAgent"]
+    }
+  ],
   "workflows": [
     {
       "name": "composa-reminders",

@@ -3,21 +3,22 @@
 > Compose what matters. Find your order.
 > 拾起零碎，归之有序。
 
-Composa 来自 **compose + persona**。它是一个长期待在聊天工具里的轻量个人 Agent：能结合近期上下文理解你是在聊天、查找、分析，还是要新增、完成、舍弃、恢复或修改一件事，然后调用受控工具替你执行。
+Composa 来自 **compose + persona**。它是一个长期待在聊天工具里的轻量个人 Agent：每个用户拥有一条持久、串行的会话，模型可以在同一轮里反复读取记忆、网页与日程，再调用受控工具完成任务。
 
 它刻意不是一个会任意操作电脑、浏览器或 shell 的通用自主 Agent，但保留了 Agent 最重要的观察、推理、工具执行和持久记忆闭环。核心链路是：
 
 ```text
-接住 → 观察网页/记忆/日程 → 推理与规划 → 受控执行 → 持久记忆 → 跟进
+接住 → 恢复会话 → 模型选择工具 → 观察结果 → 继续选择工具 → 回复与跟进
 ```
 
 ## 能力
 
 - Telegram 与 QQ 双通道，自然语言直接输入，不要求命令格式
-- 有状态的 Agent 决策层：先观察当前消息中的网页、当前用户的近期记录、对话与日程；必要时可请求读取某条旧记录保存的链接，再继续同一轮回复、分析或行动
+- OpenClaw 式原生工具循环：模型每看到一次工具结果都能继续判断下一步，不把复杂要求压缩成一个固定 intent
+- 每个 `channel + user` 一条 Durable Object 会话；消息串行、调用可恢复、写操作有幂等键，平台重复投递不会重复执行
 - 自然语言完成、舍弃、恢复和修改已有事项；支持一句话执行多个动作，状态变化不会复制出新待办
-- D1 作为唯一 source of truth，保留用户原文与 AI enrichment 的边界
-- AI-first 自然语言理解：中文数字、口语时间、事项时间与提醒时间由模型统一解释
+- D1 保存事项、提醒和审计事实，Durable Object 保存 Agent 会话与投递状态；保留用户原文与 AI enrichment 的边界
+- AI-first 自然语言理解：中文数字、口语时间、指代、事项时间与提醒时间由模型统一解释
 - 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
 - 新建或改动提醒时读取该用户在 Composa 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
@@ -28,10 +29,9 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
 - 内置基础网页阅读工具：发现普通 URL 后有界抓取正文、标题和来源；登录/验证页面诚实降级
 - QQ 分享卡片同时读取预览、隐藏字段与附件，能取得正常 URL 时继续读取原网页
-- 所有含链接的消息都会先按用户指令读取最多三个公开来源：论文看问题/方法/结论，招聘看岗位/要求/截止，活动看时间/资格，工具文档看用途/功能，普通文章看摘要/要点；结构化事实可供后续查询与比较
-- 后续只说“根据刚才的链接更新”也能由模型选择原记录、读取其中的公开链接并继续任务；工具循环最多一轮，且所有权由代码校验
-- 模型行动计划不合规时会带着原消息、对话、网页观察和校验错误自我修正一次，不会因一次 JSON 偏差立刻退化成无智能回复
-- 查询不是固定列表模板：模型先选择检索条件，D1 返回真实记录后，再由模型结合结构化网页事实回答
+- 含链接的消息由模型按真实指令选择是否读取；无需为论文、招聘、活动等内容分别编写业务分支
+- 后续只说“根据刚才的链接更新”也能在同一轮组合 `memory_search → item_get → web_read → item_update`，并更新原记录
+- 查询、网页分析、记录更新、生命周期和提醒都使用同一工具循环；所有权、SSRF、时间合法性、冲突与预算仍由代码硬校验
 
 ## 架构
 
@@ -39,15 +39,16 @@ Composa 来自 **compose + persona**。它是一个长期待在聊天工具里�
 flowchart LR
   TG["Telegram"] --> WH["Cloudflare Worker"]
   QQ["QQ Bot"] --> WH
-  WH --> OBS["Bounded Web Observation"]
-  WH --> CTX["User-scoped Memory + Schedule"]
-  OBS --> AI["Contextual Agent Planner"]
-  CTX --> AI
-  AI --> EX["Validated Tool Execution"]
-  EX --> D1[("D1")]
-  D1 -. "stored links" .-> OBS
-  EX --> WF["Cloudflare Workflows"]
-  D1 -. "retrieval result" .-> AI
+  WH --> DO["Per-user Durable Agent Session"]
+  DO --> AI["Native Model / Tool Loop"]
+  AI --> TOOLS["8 Scoped Composa Tools"]
+  TOOLS --> AI
+  TOOLS --> D1[("D1 Domain Memory")]
+  TOOLS --> WEB["Bounded Web Reader"]
+  TOOLS --> WF["Cloudflare Workflows"]
+  DO --> OUT["Durable Reply Outbox"]
+  OUT --> TG
+  OUT --> QQ
   WF --> D1
   WF --> TG
   WF --> QQ
@@ -92,7 +93,7 @@ curl http://127.0.0.1:8787/health
 | `DAILY_PLAN_TIME` | `08:00` | 当地每日计划时间；Cron 在其后的首个 15 分钟刻度发送 |
 | `DAILY_PLAN_TARGETS` | 空 | 如 `telegram:123456,qq:OPENID` |
 | `AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 根地址 |
-| `AI_MODEL` | `gpt-4.1-mini` | Chat Completions 模型名 |
+| `AI_MODEL` | `gpt-4.1-mini` | 支持 OpenAI tool calls 的模型名 |
 | `AI_EMBEDDING_MODEL` | 空 | 第二阶段预留，MVP 不使用 |
 | `AI_MAX_TOKENS` | `600` | 单次输出上限 |
 | `AI_TIMEOUT_MS` | `15000` | 单次 AI 请求超时 |
@@ -137,13 +138,14 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1 中，覆盖决策前网页观察、带上下文的行动规划、自然语言完成/舍弃/恢复/修改、多动作、聊天不落库、延后提醒与日程避让、CRUD、重复 webhook、Workflow 调度、callback、时区、Telegram/QQ 授权、QQ 卡片 URL、按指令解析多类网页、多来源比较、检索后回答和用户隔离的 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1/Durable Object 中，覆盖原生多步工具循环、会话运行时约束、记忆检索、网页读取、原记录更新、完成/舍弃/恢复、提醒避让、用户隔离、重复 webhook、Workflow、callback、时区、Telegram/QQ 授权、QQ 卡片 URL 与 Daily Plan。
 
 ## 项目结构
 
 ```text
 src/
-  ai/             Provider abstraction 与 OpenAI-compatible 实现
+  agent/          Durable Agent 会话、原生工具循环、工具策略与回复 outbox
+  ai/             Daily Plan 等非会话 AI 能力与 OpenAI-compatible 实现
   channels/       Telegram / QQ adapters
   core/           路由、业务执行、时间、提醒、Daily Plan
   db/             参数化 D1 repositories
@@ -159,4 +161,4 @@ scripts/          webhook、smoke test、备份脚本
 
 ## MVP 边界
 
-当前的“日程”来自 Composa 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。Vectorize、外部 Calendar、WhatsApp/企业微信、订阅制模型 runtime、网页 UI 与复杂 RAG 都不阻塞当前版本。`embedding_id` 已预留，但没有 Vectorize 时全部核心能力仍然可用。
+当前的“日程”来自 Composa 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`，事项与提醒继续以 D1 为业务事实源。Composa 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。

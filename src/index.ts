@@ -1,6 +1,7 @@
 import { routeRequest } from "./http/router";
 import { runDailyPlan } from "./core/daily-plan";
 export { ReminderWorkflow } from "./workflows/reminder";
+export { ComposaAgent } from "./agent/composa-agent";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

@@ -1,14 +1,12 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { routeMessage } from "../src/ai/intent";
 import { OpenAICompatibleProvider } from "../src/ai/openai-compatible";
-import type { AIProvider } from "../src/ai/provider";
 import { getAIRequests } from "../src/db/ai-usage";
 import { testConfig } from "./helpers";
 
 const now = new Date("2026-08-15T02:00:00.000Z");
 const request = {
-  purpose: "intent" as const,
+  purpose: "analysis" as const,
   messages: [{ role: "user" as const, content: "一条消息" }],
   expectJson: true,
 };
@@ -21,7 +19,7 @@ describe("OpenAI-compatible provider", () => {
       if (calls === 1) return new Response("temporary", { status: 503 });
       return Response.json({
         model: "test-model",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
         usage: { prompt_tokens: 11, completion_tokens: 3 },
       });
     };
@@ -42,16 +40,6 @@ describe("OpenAI-compatible provider", () => {
     expect(calls).toBe(0);
   });
 
-  it("does not pretend to understand if AI routing is unavailable", async () => {
-    const unavailable: AIProvider = {
-      generate: () => Promise.reject(new Error("provider offline")),
-    };
-    await expect(routeMessage("一段无法确定类别的随手记录", unavailable, now)).resolves.toMatchObject({
-      intent: "unavailable",
-      source: "system",
-    });
-  });
-
   it("uses GPT-5-compatible token parameters without forcing temperature", async () => {
     let body: Record<string, unknown> | null = null;
     const fetcher: typeof fetch = async (_input, init) => {
@@ -59,7 +47,7 @@ describe("OpenAI-compatible provider", () => {
       body = JSON.parse(init.body) as Record<string, unknown>;
       return Response.json({
         model: "gpt-5.6-luna",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
         usage: { prompt_tokens: 4, completion_tokens: 2 },
       });
     };
@@ -79,7 +67,7 @@ describe("OpenAI-compatible provider", () => {
       if (bodies.length === 1) return Response.json({ error: { message: "Unsupported parameter: max_completion_tokens" } }, { status: 400 });
       return Response.json({
         model: "gpt-5.6-luna",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
       });
     };
     const config = { ...testConfig(), aiModel: "gpt-5.6-luna" };
@@ -95,7 +83,7 @@ describe("OpenAI-compatible provider", () => {
       if (this !== undefined) throw new TypeError("Illegal invocation");
       return Promise.resolve(Response.json({
         model: "test-model",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
       }));
     };
     const provider = new OpenAICompatibleProvider(env.DB, testConfig(), "key", fetcher, () => now);

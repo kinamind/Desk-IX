@@ -6,7 +6,7 @@ import { getChannelAdapter } from "../channels/registry";
 import { claimDailyPlanRun, failDailyPlanRun, finishDailyPlanRun } from "../db/daily-plan-runs";
 import { searchItems, searchOwnedItems } from "../db/items";
 import { log } from "../observability/log";
-import { summarizeItemEnrichment } from "./item-enrichment";
+import { summarizeItemEnrichment } from "./enrichment-summary";
 import { localDate, localDayBounds, localTime } from "./time";
 import type { ChannelTarget, Item } from "./types";
 
