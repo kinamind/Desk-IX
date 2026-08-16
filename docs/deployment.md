@@ -3,7 +3,7 @@
 ## 前置条件
 
 - Node.js 22+
-- Cloudflare 账号已能使用 Workers、D1、Workflows 与 Cron Triggers
+- Cloudflare 账号已能使用 Workers、Durable Objects、D1、Workflows 与 Cron Triggers
 - `npx wrangler login` 已完成，或 CI 环境提供受限 Cloudflare API Token
 
 确认账号：
@@ -50,7 +50,7 @@ npx wrangler d1 execute composa --remote --command "SELECT name FROM sqlite_mast
 - `TELEGRAM_ALLOWED_USER_IDS`
 - `QQ_APP_ID`、`QQ_ALLOWED_USER_OPENIDS`
 - `DAILY_PLAN_TARGETS`
-- AI endpoint/model/budget
+- AI endpoint/model/budget；该 OpenAI-compatible endpoint 必须支持原生 `tool_calls`
 
 `wrangler.jsonc` 开启了 `keep_vars`，后续运行 `npm run deploy` 会保留这些面板值，不会用仓库中的空占位覆盖它们。
 
@@ -74,7 +74,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put QQ_APP_SECRET
 ```
 
-`AI_API_KEY` 可以不设置，但除 `/help` 和按钮 callback 外的自然语言理解会明确提示不可用且不会擅自保存。Composa 不会选择任何未经配置的付费 fallback。
+`AI_API_KEY` 可以不设置，但除 `/help` 和按钮 callback 外的自然语言理解会明确提示不可用且不会擅自保存。Composa 不会选择任何未经配置的付费 fallback。自定义 `AI_BASE_URL` 应以 OpenAI Chat Completions 兼容根路径结尾（通常为 `/v1`），并确认所选 `AI_MODEL` 支持工具调用；仅支持纯文本聊天的代理不能运行 v2 工具循环。
 
 Secret 更新后检查部署与健康状态：
 
@@ -94,17 +94,20 @@ npm run smoke
 
 在已授权聊天账号执行：
 
-1. 保存公开 URL，确认回复使用网页标题，并用关键词查询。
-2. 保存 Research Idea，确认没有自动生成研究方案。
-3. 用口语建一个稍后处理的任务，确认模型没有选择当前时间，回复分别显示提醒时间与截止时间，并验证主动推送与“完成/稍后/改期/舍弃”。
-4. 在当前提醒附近告诉它“这个时间有事，晚一点再提醒我”，确认它修改原事项而不是新建重复待办，取消旧提醒，并将新提醒放到冲突窗口之后。
-5. 紧接着说“刚才那个已经完成了”，确认原事项变为 completed、待提醒取消，并且没有生成重复记录。
-6. 新建两条临时事项，再用一句话完成一条、舍弃另一条；随后用自然语言恢复舍弃项。
-7. 发一句普通追问或闲聊，确认正常回复且不会自动写成 note/task。
-8. 建 deadline project，检查 `reminders` 只有至多三条 future milestones。
-9. 用 `/api/daily-plan` 预览真实 D1 计划。
-10. 用非 allowlist 账号验证被拒绝。
-11. 再次 `npm run deploy`，确认 D1 item 与 Workflow reminder 未丢失。
+1. 发送一个公开文章/论文链接并指定关注点，确认模型主动调用网页工具，回答围绕该关注点而不是只保存标题。
+2. 一次发送两至三个公开招聘页面，确认回复给出具体标题、机构/岗位、当地时区截止时间和实际读取来源数；再按机构、岗位或“哪些快截止”查询，答案应使用结构化事实而不是只列裸链接。无法读取的页面必须诚实显示为部分结果，不能补猜。
+3. 发送两篇普通文章并要求比较，确认两个页面各读取一次，回答覆盖两个来源且没有套招聘模板。
+4. 对已保存但尚未解析的链接记录，只发送“根据刚才的链接内容更新一下”，确认同一回合依次出现记忆搜索、事项读取、网页读取和原事项更新，而不是要求重新贴链接或创建副本。
+5. 保存 Research Idea，确认没有自动生成研究方案。
+6. 用口语建一个稍后处理的任务，确认模型没有选择当前时间，回复分别显示提醒时间与截止时间，并验证主动推送与“完成/稍后/改期/舍弃”。
+7. 建一个带远期截止的 project，确认只安排模型明确选择的提醒，不会机械产生 30/7/1 天三个里程碑。
+8. 在当前提醒附近告诉它“这个时间有事，晚一点再提醒我”，确认它修改原事项而不是新建重复待办，取消旧提醒，并将新提醒放到冲突窗口之后。
+9. 紧接着说“刚才那个已经完成了”，确认原事项变为 completed、待提醒取消，并且没有生成重复记录。
+10. 新建两条临时事项，再用一句话完成一条、舍弃另一条；随后用自然语言恢复舍弃项。
+11. 发一句普通追问或闲聊，确认模型可以直接回复且不会自动写成 note/task。
+12. 用两个不同授权身份分别预览 Daily Plan，确认不会混入另一身份的事项。
+13. 用非 allowlist 账号验证被拒绝。
+14. 再次 `npm run deploy`，确认 D1 item 与 Workflow reminder 未丢失。
 
 查看 D1：
 
@@ -130,3 +133,5 @@ npm run smoke
 ```
 
 Migration 只能向前新增新版本文件；不要修改已在远端应用的历史 migration。
+
+v2 首次部署还会应用一个 additive Durable Object migration，创建 `ComposaAgent` 的 SQLite 会话实例；不修改现有 D1 schema，也不会清除已有事项和提醒。回滚 Worker 代码不会自动删除这些实例。

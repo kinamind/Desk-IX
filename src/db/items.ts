@@ -78,6 +78,72 @@ export async function listAgentContextItems(
   return result.results.map(mapItem);
 }
 
+export async function searchOwnedItemsNatural(
+  db: D1Database,
+  channel: ChannelName,
+  userId: string,
+  query: string,
+  limit = 8,
+): Promise<Item[]> {
+  const candidates = await listAgentContextItems(db, channel, userId, 30);
+  const normalizedQuery = normalizeSearchText(query);
+  const terms = Array.from(new Set([
+    ...query.split(/[\s,，。；;、/]+/u),
+    normalizedQuery,
+  ].map(normalizeSearchText).filter((term) => term.length >= 2)));
+  const scored = candidates.map((item, index) => {
+    const title = normalizeSearchText(item.title);
+    const body = normalizeSearchText([
+      item.content,
+      item.rawMessage,
+      item.tags.join(" "),
+      JSON.stringify(item.aiEnrichment),
+    ].join(" "));
+    let score = 0;
+    for (const term of terms) {
+      if (title.includes(term)) score += 12;
+      if (body.includes(term)) score += 5;
+    }
+    if (normalizedQuery && title.includes(normalizedQuery)) score += 20;
+    return { item, score, index };
+  }).filter((entry) => entry.score > 0);
+  scored.sort((left, right) => right.score - left.score || left.index - right.index);
+  const boundedLimit = Math.min(Math.max(limit, 1), 12);
+  if (scored.length > 0) return scored.slice(0, boundedLimit).map((entry) => entry.item);
+  return candidates.slice(0, Math.min(boundedLimit, 5));
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLocaleLowerCase().replace(/[\p{P}\p{S}\p{Z}\p{Cc}]+/gu, "").slice(0, 2_000);
+}
+
+export async function listOwnedItemReminders(
+  db: D1Database,
+  itemId: string,
+  channel: ChannelName,
+  userId: string,
+): Promise<Array<{ id: string; remindAt: string; status: string; kind: string }>> {
+  const result = await db.prepare(`
+    SELECT r.id, r.remind_at, r.status, r.kind
+    FROM reminders r JOIN items i ON i.id = r.item_id
+    WHERE r.item_id = ? AND i.source_channel = ? AND i.source_user_id = ?
+      AND r.target_channel = ? AND r.target_user_id = ?
+    ORDER BY r.remind_at DESC
+    LIMIT 20
+  `).bind(itemId, channel, userId, channel, userId).all<{
+    id: string;
+    remind_at: string;
+    status: string;
+    kind: string;
+  }>();
+  return result.results.map((row) => ({
+    id: row.id,
+    remindAt: row.remind_at,
+    status: row.status,
+    kind: row.kind,
+  }));
+}
+
 export async function completeItem(db: D1Database, id: string, now = new Date()): Promise<boolean> {
   const timestamp = now.toISOString();
   const result = await db.prepare(`
@@ -146,14 +212,33 @@ export async function mergeItemEnrichment(
   id: string,
   enrichment: Record<string, unknown>,
   metadata: Record<string, unknown>,
-  title?: string,
+  updates: {
+    title?: string;
+    primaryUrl?: string;
+    dueAtIfMissing?: string;
+    tags?: string[];
+  } = {},
   now = new Date(),
 ): Promise<void> {
   await db.prepare(`
     UPDATE items
-    SET ai_enrichment = ?, metadata = ?, title = COALESCE(?, title), updated_at = ?
+    SET ai_enrichment = ?, metadata = ?,
+        title = COALESCE(?, title),
+        url = COALESCE(url, ?),
+        due_at = COALESCE(due_at, ?),
+        tags = COALESCE(?, tags),
+        updated_at = ?
     WHERE id = ?
-  `).bind(JSON.stringify(enrichment), JSON.stringify(metadata), title ?? null, now.toISOString(), id).run();
+  `).bind(
+    JSON.stringify(enrichment),
+    JSON.stringify(metadata),
+    updates.title ?? null,
+    updates.primaryUrl ?? null,
+    updates.dueAtIfMissing ?? null,
+    updates.tags ? JSON.stringify(updates.tags) : null,
+    now.toISOString(),
+    id,
+  ).run();
 }
 
 export async function searchItems(db: D1Database, filters: ItemSearchFilters = {}): Promise<Item[]> {
@@ -203,9 +288,9 @@ async function searchItemsWithScope(
     values.push(filters.createdFrom);
   }
   if (filters.keyword) {
-    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0)");
+    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0 OR instr(lower(ai_enrichment), lower(?)) > 0)");
     const boundedKeyword = filters.keyword.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-    values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
+    values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
   }
 
   const limit = Math.min(Math.max(filters.limit ?? 10, 1), 50);

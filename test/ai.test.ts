@@ -1,14 +1,14 @@
 import { env } from "cloudflare:workers";
+import { generateText } from "ai";
 import { describe, expect, it } from "vitest";
-import { routeMessage } from "../src/ai/intent";
 import { OpenAICompatibleProvider } from "../src/ai/openai-compatible";
-import type { AIProvider } from "../src/ai/provider";
+import { createComposaModel } from "../src/agent/model";
 import { getAIRequests } from "../src/db/ai-usage";
 import { testConfig } from "./helpers";
 
 const now = new Date("2026-08-15T02:00:00.000Z");
 const request = {
-  purpose: "intent" as const,
+  purpose: "analysis" as const,
   messages: [{ role: "user" as const, content: "一条消息" }],
   expectJson: true,
 };
@@ -21,7 +21,7 @@ describe("OpenAI-compatible provider", () => {
       if (calls === 1) return new Response("temporary", { status: 503 });
       return Response.json({
         model: "test-model",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
         usage: { prompt_tokens: 11, completion_tokens: 3 },
       });
     };
@@ -42,16 +42,6 @@ describe("OpenAI-compatible provider", () => {
     expect(calls).toBe(0);
   });
 
-  it("does not pretend to understand if AI routing is unavailable", async () => {
-    const unavailable: AIProvider = {
-      generate: () => Promise.reject(new Error("provider offline")),
-    };
-    await expect(routeMessage("一段无法确定类别的随手记录", unavailable, now)).resolves.toMatchObject({
-      intent: "unavailable",
-      source: "system",
-    });
-  });
-
   it("uses GPT-5-compatible token parameters without forcing temperature", async () => {
     let body: Record<string, unknown> | null = null;
     const fetcher: typeof fetch = async (_input, init) => {
@@ -59,7 +49,7 @@ describe("OpenAI-compatible provider", () => {
       body = JSON.parse(init.body) as Record<string, unknown>;
       return Response.json({
         model: "gpt-5.6-luna",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
         usage: { prompt_tokens: 4, completion_tokens: 2 },
       });
     };
@@ -79,7 +69,7 @@ describe("OpenAI-compatible provider", () => {
       if (bodies.length === 1) return Response.json({ error: { message: "Unsupported parameter: max_completion_tokens" } }, { status: 400 });
       return Response.json({
         model: "gpt-5.6-luna",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
       });
     };
     const config = { ...testConfig(), aiModel: "gpt-5.6-luna" };
@@ -95,10 +85,80 @@ describe("OpenAI-compatible provider", () => {
       if (this !== undefined) throw new TypeError("Illegal invocation");
       return Promise.resolve(Response.json({
         model: "test-model",
-        choices: [{ message: { content: "{\"intent\":\"help\"}" } }],
+        choices: [{ message: { content: "ok" } }],
       }));
     };
     const provider = new OpenAICompatibleProvider(env.DB, testConfig(), "key", fetcher, () => now);
     await expect(provider.generate(request)).resolves.toMatchObject({ model: "test-model" });
   });
 });
+
+describe("Agent model provider contract", () => {
+  it("does not impose a completion-token cap on agent turns", async () => {
+    let body: Record<string, unknown> | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body");
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return agentModelResponse();
+    };
+
+    await generateText({
+      model: createComposaModel(agentModelEnv(), fetcher),
+      prompt: "hello",
+    });
+
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("sends max_completion_tokens for GPT-5 through the native agent model", async () => {
+    let body: Record<string, unknown> | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body");
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return agentModelResponse();
+    };
+
+    await generateText({
+      model: createComposaModel(agentModelEnv(), fetcher),
+      prompt: "hello",
+      maxOutputTokens: 600,
+    });
+
+    expect(body).toMatchObject({ model: "gpt-5.6-luna", max_completion_tokens: 600 });
+    expect(body).not.toHaveProperty("max_tokens");
+  });
+});
+
+function agentModelEnv(): Env {
+  return {
+    APP_NAME: "Composa",
+    APP_LOCALE: "zh-CN",
+    TIMEZONE: "Asia/Singapore",
+    DAILY_PLAN_TIME: "08:00",
+    AI_BASE_URL: "https://gateway.test/v1",
+    AI_MODEL: "gpt-5.6-luna",
+    AI_EMBEDDING_MODEL: "",
+    AI_MAX_TOKENS: "600",
+    AI_TIMEOUT_MS: "15000",
+    AI_DAILY_REQUEST_LIMIT: "100",
+    AI_API_KEY: "test-key",
+    URL_FETCH_TIMEOUT_MS: "6000",
+    URL_MAX_BYTES: "524288",
+    QQ_API_BASE_URL: "https://api.bot.qq.com",
+  } as unknown as Env;
+}
+
+function agentModelResponse(): Response {
+  return Response.json({
+    id: "chatcmpl-test",
+    created: 1,
+    model: "gpt-5.6-luna",
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: "ok" },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+  });
+}

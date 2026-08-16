@@ -1,0 +1,7 @@
+{"id":"C01","claim":"Composa's intent-enum pipeline is an architectural mismatch for compositional personal-assistant requests.","evidence_ids":["E01","E02","E09"],"confidence":"high"}
+{"id":"C02","claim":"A native per-session tool loop can resolve references and compose retrieval, reading, mutation, and reply in one turn.","evidence_ids":["E01","E02","E03","E09","E12"],"confidence":"high"}
+{"id":"C03","claim":"Durable Object session state and D1 domain memory should remain separate.","evidence_ids":["E03","E04","E12"],"confidence":"high"}
+{"id":"C04","claim":"Cloudflare Think is the best current substrate for Composa v2, provided its experimental dependency is isolated.","evidence_ids":["E09","E10","E11","E12","E13","E14"],"confidence":"medium-high"}
+{"id":"C05","claim":"Safety and ownership must be enforced in tool code, not entrusted to the system prompt.","evidence_ids":["E05","E06","E11"],"confidence":"high"}
+{"id":"C06","claim":"Structured lifecycle and tool observability is required to diagnose production failures without guessing.","evidence_ids":["E08","E13","E14"],"confidence":"high"}
+{"id":"C07","claim":"Composa can retain the OpenClaw control pattern while omitting gateway, shell, browser, nodes, plugins, and multi-agent breadth.","evidence_ids":["E01","E02","E05","E09"],"confidence":"high"}

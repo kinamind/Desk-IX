@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getConfig, isAIEnabled } from "../config";
 import { getChannelAdapter } from "../channels/registry";
 import { processIncoming } from "../core/processor";
+import { submitAgentMessage } from "../agent/ingress";
 import { buildDailyPlan, runDailyPlan } from "../core/daily-plan";
 import { localDate } from "../core/time";
 import { getAIRequests } from "../db/ai-usage";
@@ -42,7 +43,9 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
       if (parsed.kind === "unauthorized") return Response.json({ error: "Forbidden" }, { status: 403 });
       if (parsed.kind === "challenge") return parsed.response;
       if (parsed.kind === "ignored") return parsed.response ?? Response.json({ ok: true });
-      ctx.waitUntil(processIncoming(env, parsed.message));
+      ctx.waitUntil(parsed.message.eventType === "callback"
+        ? processIncoming(env, parsed.message)
+        : submitAgentMessage(env, parsed.message));
       return Response.json({ ok: true });
     }
 

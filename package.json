@@ -23,6 +23,10 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.30",
+    "@cloudflare/think": "^0.15.1",
+    "agents": "^0.20.1",
+    "ai": "^7.0.66",
     "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
     "tweetnacl": "^1.0.3",

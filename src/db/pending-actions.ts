@@ -57,3 +57,40 @@ export async function takePendingAction(
     expiresAt: row.expires_at,
   };
 }
+
+export async function getPendingAction(
+  db: D1Database,
+  channel: ChannelName,
+  userId: string,
+  now = new Date(),
+): Promise<PendingAction | null> {
+  const row = await db.prepare(`
+    SELECT * FROM pending_actions
+    WHERE channel = ? AND user_id = ? AND expires_at > ?
+    LIMIT 1
+  `).bind(channel, userId, now.toISOString()).first<PendingActionRow>();
+  if (!row) return null;
+  return {
+    channel: row.channel,
+    userId: row.user_id,
+    action: row.action,
+    itemId: row.item_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+export async function clearPendingAction(
+  db: D1Database,
+  channel: ChannelName,
+  userId: string,
+  itemId?: string,
+): Promise<void> {
+  if (itemId) {
+    await db.prepare(`
+      DELETE FROM pending_actions WHERE channel = ? AND user_id = ? AND item_id = ?
+    `).bind(channel, userId, itemId).run();
+    return;
+  }
+  await db.prepare("DELETE FROM pending_actions WHERE channel = ? AND user_id = ?").bind(channel, userId).run();
+}

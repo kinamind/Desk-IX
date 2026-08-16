@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { archiveItem, createItem, completeItem, getItem, listAgentContextItems, restoreItem, searchItems, searchOwnedItems, updateItem } from "../src/db/items";
+import { archiveItem, createItem, completeItem, getItem, listAgentContextItems, mergeItemEnrichment, restoreItem, searchItems, searchOwnedItems, updateItem } from "../src/db/items";
 import { claimMessage, failMessage } from "../src/db/messages";
 import { createReminder, markReminderFailed } from "../src/db/reminders";
 import { listScheduleWindows } from "../src/db/schedule";
@@ -200,5 +200,56 @@ describe("D1 repositories", () => {
       },
     ]));
     expect(windows.some((window) => window.title === "别人的会议")).toBe(false);
+  });
+
+  it("finds records by structured enrichment fields", async () => {
+    const item = await createItem(env.DB, {
+      type: "note",
+      title: "研究院招聘",
+      content: "三个来源页面",
+      rawMessage: "记录一下",
+      sourceChannel: "qq",
+      sourceUserId: "enrichment-search-owner",
+      sourceMessageId: "enrichment-search",
+      aiEnrichment: {
+        category: "recruitment",
+        organizations: ["深圳理工大学人工智能研究院"],
+        roles: ["教学科研人员"],
+        locations: ["深圳"],
+      },
+    }, now);
+
+    await expect(searchOwnedItems(env.DB, "qq", "enrichment-search-owner", {
+      keyword: "教学科研人员",
+      limit: 10,
+    })).resolves.toMatchObject([{ id: item.id }]);
+  });
+
+  it("does not overwrite a user-set URL or deadline when promoting enrichment", async () => {
+    const item = await createItem(env.DB, {
+      type: "resource",
+      title: "我自己的标题",
+      content: "申请页面",
+      rawMessage: "申请页面",
+      url: "https://user.example/application",
+      dueAt: "2026-09-01T12:00:00.000Z",
+      tags: ["用户标签"],
+      sourceChannel: "qq",
+      sourceUserId: "enrichment-preserve-owner",
+      sourceMessageId: "enrichment-preserve",
+    }, now);
+
+    await mergeItemEnrichment(env.DB, item.id, { category: "application" }, { fetch_status: "ok" }, {
+      primaryUrl: "https://model.example/application",
+      dueAtIfMissing: "2026-08-31T12:00:00.000Z",
+      tags: ["用户标签", "申请"],
+    }, now);
+
+    await expect(getItem(env.DB, item.id)).resolves.toMatchObject({
+      title: "我自己的标题",
+      url: "https://user.example/application",
+      dueAt: "2026-09-01T12:00:00.000Z",
+      tags: ["用户标签", "申请"],
+    });
   });
 });
