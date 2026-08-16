@@ -4,20 +4,30 @@ import { OpenAICompatibleProvider } from "../ai/openai-compatible";
 import { DAILY_PLAN_PROMPT } from "../ai/prompts";
 import { getChannelAdapter } from "../channels/registry";
 import { claimDailyPlanRun, failDailyPlanRun, finishDailyPlanRun } from "../db/daily-plan-runs";
-import { searchItems } from "../db/items";
+import { searchItems, searchOwnedItems } from "../db/items";
 import { log } from "../observability/log";
+import { summarizeItemEnrichment } from "./item-enrichment";
 import { localDate, localDayBounds, localTime } from "./time";
-import type { Item } from "./types";
+import type { ChannelTarget, Item } from "./types";
 
 export function shouldRunDailyPlan(now: Date, timezone: string, configuredTime: string): boolean {
   return localTime(now, timezone) >= configuredTime;
 }
 
-export async function buildDailyPlan(env: Env, now = new Date(), fetcher: typeof fetch = fetch): Promise<string> {
+export async function buildDailyPlan(
+  env: Env,
+  now = new Date(),
+  fetcher: typeof fetch = fetch,
+  target?: ChannelTarget,
+): Promise<string> {
   const config = getConfig(env);
-  const items = await searchItems(env.DB, { statuses: ["open", "raw", "active"], limit: 50 });
+  const filters = { statuses: ["open", "raw", "active"], limit: 50 };
+  const items = target
+    ? await searchOwnedItems(env.DB, target.channel, target.userId, filters)
+    : await searchItems(env.DB, filters);
   const fallback = deterministicPlan(items, now, config.timezone);
-  if (!isAIEnabled(env) || items.length === 0) return fallback;
+  if (items.length === 0) return fallback;
+  if (!isAIEnabled(env)) return annotateFallback(fallback);
 
   try {
     const provider = new OpenAICompatibleProvider(env.DB, config, env.AI_API_KEY, fetcher, () => now);
@@ -26,13 +36,34 @@ export async function buildDailyPlan(env: Env, now = new Date(), fetcher: typeof
       maxTokens: 500,
       messages: [
         { role: "system", content: DAILY_PLAN_PROMPT },
-        { role: "user", content: JSON.stringify({ date: localDate(now, config.timezone), timezone: config.timezone, items }) },
+        {
+          role: "user",
+          content: JSON.stringify({
+            date: localDate(now, config.timezone),
+            timezone: config.timezone,
+            items: items.slice(0, 30).map((item) => {
+              const enrichment = summarizeItemEnrichment(item.aiEnrichment);
+              return {
+                id: item.id,
+                type: item.type,
+                title: item.title,
+                content: item.content.slice(0, 500),
+                status: item.status,
+                priority: item.priority,
+                estimated_duration: item.estimatedDuration,
+                due_at: item.dueAt,
+                start_after: item.startAfter,
+                ...(enrichment ? { enrichment } : {}),
+              };
+            }),
+          }),
+        },
       ],
     });
     return response.text.slice(0, 2200);
   } catch (error) {
     log("warn", "daily_plan_ai_fallback", { error: error instanceof Error ? error.message : String(error) });
-    return fallback;
+    return annotateFallback(fallback);
   }
 }
 
@@ -52,9 +83,9 @@ export async function runDailyPlan(env: Env, now = new Date(), fetcher: typeof f
   const pending = claims.filter((entry) => entry.claimed);
   if (pending.length === 0) return;
 
-  const content = await buildDailyPlan(env, now, fetcher);
   for (const { target } of pending) {
     try {
+      const content = await buildDailyPlan(env, now, fetcher, target);
       const adapter = getChannelAdapter(env, target.channel, fetcher);
       await adapter.send(target, { text: content });
       await finishDailyPlanRun(env.DB, day, target.channel, target.userId, content, now);
@@ -87,6 +118,10 @@ function deterministicPlan(items: Item[], now: Date, timezone: string): string {
   appendSection(lines, "Should", should);
   appendSection(lines, "If time", ifTime);
   return lines.slice(0, 12).join("\n");
+}
+
+function annotateFallback(plan: string): string {
+  return `模型暂不可用，以下按截止时间与优先级整理。\n${plan}`;
 }
 
 function appendSection(lines: string[], label: string, items: Item[]): void {

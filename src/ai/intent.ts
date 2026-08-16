@@ -15,6 +15,8 @@ import {
   type UpdateItemAgentAction,
 } from "../core/types";
 import { log } from "../observability/log";
+import { summarizeItemEnrichment } from "../core/item-enrichment";
+import type { WebPageReading } from "../url/reader";
 import { parseAIJson } from "./openai-compatible";
 import type { AIProvider } from "./provider";
 import { INTENT_PROMPT, REMINDER_REPAIR_PROMPT, RESCHEDULE_PROMPT } from "./prompts";
@@ -263,23 +265,33 @@ function normalizeActions(
 }
 
 function summarizeContext(items: Item[], schedule: ScheduleWindow[]): Array<Record<string, unknown>> {
-  return items.slice(0, 20).map((item) => ({
-    id: item.id,
-    type: item.type,
-    title: item.title,
-    content: item.content.slice(0, 500),
-    status: item.status,
-    priority: item.priority,
-    due_at: item.dueAt,
-    updated_at: item.updatedAt,
-    tags: item.tags.slice(0, 8),
-    current_reminder_at: schedule
-      .filter((window) => window.source === "reminder" && window.itemId === item.id)
-      .map((window) => window.startAt),
-  }));
+  return items.slice(0, 20).map((item) => {
+    const enrichment = summarizeItemEnrichment(item.aiEnrichment);
+    return {
+      id: item.id,
+      type: item.type,
+      title: item.title,
+      content: item.content.slice(0, 500),
+      status: item.status,
+      priority: item.priority,
+      due_at: item.dueAt,
+      updated_at: item.updatedAt,
+      tags: item.tags.slice(0, 8),
+      ...(enrichment ? { enrichment } : {}),
+      current_reminder_at: schedule
+        .filter((window) => window.source === "reminder" && window.itemId === item.id)
+        .map((window) => window.startAt),
+    };
+  });
 }
 
-function buildModelInput(message: string, items: Item[], conversation: ConversationTurn[], schedule: ScheduleWindow[]): string {
+function buildModelInput(
+  message: string,
+  items: Item[],
+  conversation: ConversationTurn[],
+  schedule: ScheduleWindow[],
+  webpages: WebPageReading[],
+): string {
   const recentItems = summarizeContext(items, schedule);
   const recentConversation = conversation.slice(-6).map((turn) => ({
     user: turn.user.slice(0, 1_000),
@@ -293,10 +305,20 @@ function buildModelInput(message: string, items: Item[], conversation: Conversat
     end_at: window.endAt,
     source: window.source,
   }));
-  const boundedMessage = message.slice(0, 6_000);
-  while (recentItems.length > 0 || recentConversation.length > 0 || scheduleContext.length > 0) {
+  let boundedMessage = message.slice(0, 6_000);
+  let webpageTextLimit = 3_500;
+  const webpageContext = (): Array<Record<string, unknown>> => webpages.slice(0, 3).map((page) => ({
+    url: page.finalUrl.slice(0, 1_000),
+    title: page.title?.slice(0, 500) ?? null,
+    description: page.description?.slice(0, 800) ?? null,
+    source: page.source.slice(0, 200),
+    text: page.text.slice(0, webpageTextLimit),
+  }));
+
+  for (;;) {
     const candidate = JSON.stringify({
       message: boundedMessage,
+      webpages: webpageContext(),
       recent_items: recentItems,
       recent_conversation: recentConversation,
       schedule: scheduleContext,
@@ -304,9 +326,14 @@ function buildModelInput(message: string, items: Item[], conversation: Conversat
     if (candidate.length <= MAX_MODEL_INPUT_CHARS) return candidate;
     if (recentConversation.length > 2) recentConversation.shift();
     else if (recentItems.length > 5) recentItems.pop();
-    else scheduleContext.pop();
+    else if (scheduleContext.length > 20) scheduleContext.pop();
+    else if (webpageTextLimit > 800) webpageTextLimit -= 400;
+    else if (boundedMessage.length > 2_000) boundedMessage = boundedMessage.slice(0, boundedMessage.length - 500);
+    else if (recentConversation.length > 0) recentConversation.shift();
+    else if (recentItems.length > 0) recentItems.pop();
+    else if (scheduleContext.length > 0) scheduleContext.pop();
+    else return candidate.slice(0, MAX_MODEL_INPUT_CHARS);
   }
-  return JSON.stringify({ message: boundedMessage, recent_items: [], recent_conversation: [], schedule: [] });
 }
 
 function normalizeAvoidWindows(windows: Array<z.infer<typeof avoidWindowSchema>> | null | undefined): ScheduleWindow[] {
@@ -333,6 +360,7 @@ export async function routeMessage(
   contextItems: Item[] = [],
   conversation: ConversationTurn[] = [],
   schedule: ScheduleWindow[] = [],
+  webpages: WebPageReading[] = [],
 ): Promise<ParsedIntent> {
   const trimmed = text.trim();
   if (/^\/?(?:help|帮助|使用说明)$/i.test(trimmed)) {
@@ -340,7 +368,7 @@ export async function routeMessage(
   }
   if (!provider) return unavailableIntent();
 
-  const input = buildModelInput(trimmed, contextItems, conversation, schedule);
+  const input = buildModelInput(trimmed, contextItems, conversation, schedule, webpages);
 
   try {
     let response = await provider.generate({
@@ -392,6 +420,7 @@ export async function routeMessage(
         model: response.model,
         generated_fields: ["intent", "actions", "avoid_windows", "query", "reply"],
         context_item_count: contextItems.length,
+        webpage_observation_count: webpages.length,
       },
     };
   } catch (error) {

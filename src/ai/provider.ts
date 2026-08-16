@@ -6,7 +6,7 @@ export interface AIMessage {
 }
 
 export interface AIRequest {
-  purpose: "intent" | "reschedule" | "url_enrichment" | "daily_plan" | "analysis";
+  purpose: "intent" | "reschedule" | "url_enrichment" | "daily_plan" | "analysis" | "query_response";
   messages: AIMessage[];
   maxTokens?: number;
   temperature?: number;

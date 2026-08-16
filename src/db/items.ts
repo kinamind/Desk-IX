@@ -146,14 +146,33 @@ export async function mergeItemEnrichment(
   id: string,
   enrichment: Record<string, unknown>,
   metadata: Record<string, unknown>,
-  title?: string,
+  updates: {
+    title?: string;
+    primaryUrl?: string;
+    dueAtIfMissing?: string;
+    tags?: string[];
+  } = {},
   now = new Date(),
 ): Promise<void> {
   await db.prepare(`
     UPDATE items
-    SET ai_enrichment = ?, metadata = ?, title = COALESCE(?, title), updated_at = ?
+    SET ai_enrichment = ?, metadata = ?,
+        title = COALESCE(?, title),
+        url = COALESCE(url, ?),
+        due_at = COALESCE(due_at, ?),
+        tags = COALESCE(?, tags),
+        updated_at = ?
     WHERE id = ?
-  `).bind(JSON.stringify(enrichment), JSON.stringify(metadata), title ?? null, now.toISOString(), id).run();
+  `).bind(
+    JSON.stringify(enrichment),
+    JSON.stringify(metadata),
+    updates.title ?? null,
+    updates.primaryUrl ?? null,
+    updates.dueAtIfMissing ?? null,
+    updates.tags ? JSON.stringify(updates.tags) : null,
+    now.toISOString(),
+    id,
+  ).run();
 }
 
 export async function searchItems(db: D1Database, filters: ItemSearchFilters = {}): Promise<Item[]> {
@@ -203,9 +222,9 @@ async function searchItemsWithScope(
     values.push(filters.createdFrom);
   }
   if (filters.keyword) {
-    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0)");
+    clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0 OR instr(lower(ai_enrichment), lower(?)) > 0)");
     const boundedKeyword = filters.keyword.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-    values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
+    values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
   }
 
   const limit = Math.min(Math.max(filters.limit ?? 10, 1), 50);

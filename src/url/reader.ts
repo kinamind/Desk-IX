@@ -15,6 +15,17 @@ export interface WebPageReading {
   truncated: boolean;
 }
 
+export interface WebPageFailure {
+  requestedUrl: string;
+  error: string;
+}
+
+export interface WebPageBatch {
+  requestedUrls: string[];
+  pages: WebPageReading[];
+  failures: WebPageFailure[];
+}
+
 export function discoverUrls(text: string, limit = 5): string[] {
   const urls: string[] = [];
   for (const match of text.matchAll(URL_PATTERN)) {
@@ -42,4 +53,25 @@ export async function readWebPage(
     text: metadata.text,
     truncated: page.truncated,
   };
+}
+
+export async function readWebPagesFromText(
+  text: string,
+  config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxBytes">,
+  fetcher: typeof fetch = fetch,
+  limit = 3,
+): Promise<WebPageBatch> {
+  const requestedUrls = discoverUrls(text, Math.min(Math.max(limit, 1), 3));
+  const settled = await Promise.allSettled(requestedUrls.map((url) => readWebPage(url, config, fetcher)));
+  const pages: WebPageReading[] = [];
+  const failures: WebPageFailure[] = [];
+  for (const [index, result] of settled.entries()) {
+    const requestedUrl = requestedUrls[index] ?? "";
+    if (result.status === "fulfilled") pages.push(result.value);
+    else failures.push({
+      requestedUrl,
+      error: (result.reason instanceof Error ? result.reason.message : String(result.reason)).slice(0, 300),
+    });
+  }
+  return { requestedUrls, pages, failures };
 }

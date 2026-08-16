@@ -51,6 +51,17 @@ function providerFor(payload: Record<string, unknown>): AIProvider {
   };
 }
 
+function providerByPurpose(intentPayload: Record<string, unknown>, enrichmentPayload: Record<string, unknown>): AIProvider {
+  return {
+    generate: (request) => Promise.resolve({
+      text: JSON.stringify(request.purpose === "url_enrichment" ? enrichmentPayload : intentPayload),
+      model: "test-model",
+      inputTokens: 10,
+      outputTokens: 5,
+    }),
+  };
+}
+
 describe("intent to business operation", () => {
   it("faithfully stores an idea and deduplicates the webhook", async () => {
     const now = new Date("2026-08-15T02:00:00.000Z");
@@ -275,6 +286,42 @@ describe("intent to business operation", () => {
 
     expect(sentText).toContain("有一点满");
     expect(await getItemBySource(env.DB, "telegram", incoming.eventId)).toBeNull();
+  });
+
+  it("can execute an action and answer the user's related question in the same turn", async () => {
+    const now = new Date("2026-08-16T03:20:00.000Z");
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:act-and-answer",
+      messageId: "105b",
+      userId: "42",
+      text: "把这个想法记下来，也告诉我它和普通待办有什么区别：研究 Agent 记忆边界",
+      timestamp: now.toISOString(),
+      eventType: "message",
+    };
+    let sentText = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      sentText = (JSON.parse(init.body) as { text: string }).text;
+      return Response.json({ ok: true, result: { message_id: 2061 } });
+    };
+
+    await processIncoming(env, incoming, fetcher, now, providerFor({
+      intent: "act",
+      actions: [{
+        action: "create_item",
+        type: "idea",
+        title: "研究 Agent 记忆边界",
+        content: "研究 Agent 记忆边界",
+        status: "raw",
+      }],
+      reply: "它关注的是助理应记住什么、何时取回和何时遗忘，而普通待办只描述要做什么。",
+      confidence: 0.95,
+    }));
+
+    await expect(getItemBySource(env.DB, "telegram", incoming.eventId)).resolves.toMatchObject({ type: "idea" });
+    expect(sentText).toContain("已记录 Idea");
+    expect(sentText).toContain("普通待办只描述要做什么");
   });
 
   it("creates multiple records from one action plan without collisions", async () => {
@@ -517,5 +564,279 @@ describe("intent to business operation", () => {
       { remind_at: "2026-08-16T06:00:00.000Z", status: "pending" },
       { remind_at: "2026-08-16T07:00:00.000Z", status: "failed" },
     ]);
+  });
+
+  it("turns three recruitment links added to an existing vague note into a structured record", async () => {
+    const now = new Date("2026-08-16T08:02:47.000Z");
+    const existing = await createItem(env.DB, {
+      type: "note",
+      title: "这个招聘信息帮我记录一下",
+      content: "招聘信息",
+      rawMessage: "这个招聘信息帮我记录一下",
+      sourceChannel: "telegram",
+      sourceUserId: "recruitment-owner",
+      sourceMessageId: "old-recruitment-note",
+    }, new Date("2026-08-15T04:36:01.339Z"));
+    const recruitmentUrls = [
+      "https://jobs.example/notice",
+      "https://institute.example/center",
+      "https://faculty.example/team",
+    ];
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:recruitment-links",
+      messageId: "111",
+      userId: "recruitment-owner",
+      text: `记录一下这个招聘信息：\n${recruitmentUrls.join("\n")}`,
+      timestamp: now.toISOString(),
+      eventType: "message",
+      replyToMessageId: "111",
+    };
+    let sentText = "";
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.telegram.org")) {
+        if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+        sentText = (JSON.parse(init.body) as { text: string }).text;
+        return Response.json({ ok: true, result: { message_id: 211 } });
+      }
+      const title = url.includes("jobs") ? "人才招聘" : url.includes("institute") ? "研究中心" : "师资队伍";
+      return new Response(`<html><head><title>${title}</title></head><body>深圳理工大学人工智能研究院招聘教学科研人员。申请：https://jobs.example/apply</body></html>`, {
+        headers: { "content-type": "text/html" },
+      });
+    };
+
+    await processIncoming(env, incoming, fetcher, now, providerByPurpose({
+      intent: "act",
+      actions: [{
+        action: "update_item",
+        target_item_id: existing.id,
+        title: "深圳理工大学人工智能研究院招聘",
+        content: incoming.text,
+      }],
+      confidence: 0.98,
+    }, {
+      category: "recruitment",
+      title: "深圳理工大学人工智能研究院招聘",
+      summary: "人工智能研究院及相关中心招聘教学科研人员。",
+      organizations: ["深圳理工大学人工智能研究院"],
+      roles: ["教学科研人员", "研究中心岗位"],
+      locations: ["深圳"],
+      requirements: ["以各岗位页面要求为准"],
+      deadline: "2026-08-31T15:59:59.000Z",
+      application_urls: ["https://jobs.example/apply"],
+      tags: ["招聘", "人工智能", "深圳"],
+    }));
+
+    const item = await getItem(env.DB, existing.id);
+    expect(item).toMatchObject({
+      title: "深圳理工大学人工智能研究院招聘",
+      url: recruitmentUrls[0],
+      dueAt: "2026-08-31T15:59:59.000Z",
+    });
+    expect(item?.tags).toEqual(["招聘", "人工智能", "深圳"]);
+    expect(item?.aiEnrichment.category).toBe("recruitment");
+    expect(item?.aiEnrichment.organizations).toEqual(["深圳理工大学人工智能研究院"]);
+    expect(item?.aiEnrichment.source_urls).toEqual(recruitmentUrls);
+    expect(sentText).toContain("已整理招聘信息");
+    expect(sentText).toContain("截止：8/31 23:59");
+    expect(sentText).toContain("来源：已读取 3/3 个网页");
+  });
+
+  it("gives analysis the current timezone and structured recruitment facts", async () => {
+    const now = new Date("2026-08-16T08:03:39.000Z");
+    await createItem(env.DB, {
+      type: "note",
+      title: "深圳理工大学人工智能研究院招聘",
+      content: "招聘来源摘要",
+      rawMessage: "记录招聘信息",
+      sourceChannel: "telegram",
+      sourceUserId: "analysis-owner",
+      sourceMessageId: "analysis-recruitment",
+      dueAt: "2026-08-31T15:59:59.000Z",
+      aiEnrichment: {
+        category: "recruitment",
+        summary: "人工智能研究院招聘教学科研人员。",
+        organizations: ["深圳理工大学人工智能研究院"],
+        roles: ["教学科研人员"],
+        locations: ["深圳"],
+        deadline: "2026-08-31T15:59:59.000Z",
+        source_urls: ["https://jobs.example/notice"],
+      },
+    }, now);
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:analyze-recruitment",
+      messageId: "112",
+      userId: "analysis-owner",
+      text: "现在记录了哪些招聘信息，哪些快截止？",
+      timestamp: now.toISOString(),
+      eventType: "message",
+      replyToMessageId: "112",
+    };
+    let analysisInput = "";
+    let analysisSystem = "";
+    let sentText = "";
+    const provider: AIProvider = {
+      generate: (request) => {
+        if (request.purpose === "intent") {
+          return Promise.resolve({
+            text: JSON.stringify({ intent: "analyze", confidence: 0.97 }),
+            model: "test-model",
+            inputTokens: 10,
+            outputTokens: 5,
+          });
+        }
+        analysisSystem = request.messages[0]?.content ?? "";
+        analysisInput = request.messages.at(-1)?.content ?? "";
+        return Promise.resolve({
+          text: "深圳理工大学人工智能研究院招聘，截止：8/31 23:59。",
+          model: "test-model",
+          inputTokens: 20,
+          outputTokens: 10,
+        });
+      },
+    };
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      sentText = (JSON.parse(init.body) as { text: string }).text;
+      return Response.json({ ok: true, result: { message_id: 212 } });
+    };
+
+    await processIncoming(env, incoming, fetcher, now, provider);
+
+    expect(analysisSystem).toContain("Asia/Singapore");
+    expect(analysisInput).toContain('"current_time":"2026-08-16T08:03:39.000Z"');
+    expect(analysisInput).toContain('"timezone":"Asia/Singapore"');
+    expect(analysisInput).toContain('"category":"recruitment"');
+    expect(analysisInput).toContain("深圳理工大学人工智能研究院");
+    expect(sentText).toContain("8/31 23:59");
+  });
+
+  it("lets the model answer from retrieval tool results instead of returning a bare row list", async () => {
+    const now = new Date("2026-08-16T08:20:00.000Z");
+    await createItem(env.DB, {
+      type: "resource",
+      title: "深圳理工大学人工智能研究院招聘",
+      content: "招聘教学科研人员",
+      rawMessage: "记录招聘信息",
+      url: "https://jobs.example/notice",
+      sourceChannel: "telegram",
+      sourceUserId: "query-owner",
+      sourceMessageId: "query-recruitment",
+      dueAt: "2026-08-31T15:59:59.000Z",
+      aiEnrichment: {
+        category: "recruitment",
+        organizations: ["深圳理工大学人工智能研究院"],
+        roles: ["教学科研人员"],
+        requirements: ["具有相关研究背景"],
+        summary: "招聘教学科研人员。",
+      },
+    }, now);
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:query-enriched-recruitment",
+      messageId: "query-1",
+      userId: "query-owner",
+      text: "我记过的招聘里，哪个快截止，要求是什么？",
+      timestamp: now.toISOString(),
+      eventType: "message",
+    };
+    let queryToolInput = "";
+    let sentText = "";
+    const provider: AIProvider = {
+      generate: (request) => {
+        if (request.purpose === "intent") {
+          return Promise.resolve({
+            text: JSON.stringify({ intent: "query", query: { keyword: "招聘", limit: 10 }, confidence: 0.97 }),
+            model: "test-model",
+            inputTokens: 10,
+            outputTokens: 5,
+          });
+        }
+        queryToolInput = request.messages.at(-1)?.content ?? "";
+        return Promise.resolve({
+          text: "最临近的是深圳理工大学人工智能研究院招聘，8 月 31 日 23:59 截止；页面写明的要求是具有相关研究背景。",
+          model: "test-model",
+          inputTokens: 20,
+          outputTokens: 12,
+        });
+      },
+    };
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+      sentText = (JSON.parse(init.body) as { text: string }).text;
+      return Response.json({ ok: true, result: { message_id: 214 } });
+    };
+
+    await processIncoming(env, incoming, fetcher, now, provider);
+
+    expect(queryToolInput).toContain("tool_results");
+    expect(queryToolInput).toContain("具有相关研究背景");
+    expect(queryToolInput).toContain("2026-08-31T15:59:59.000Z");
+    expect(sentText).toContain("要求");
+    expect(sentText).toContain("8 月 31 日 23:59");
+  });
+
+  it("reads every bounded link when the user asks for a comparison", async () => {
+    const now = new Date("2026-08-16T09:00:00.000Z");
+    const incoming: IncomingMessage = {
+      channel: "telegram",
+      eventId: "update:compare-two-links",
+      messageId: "113",
+      userId: "compare-owner",
+      text: "比较这两篇文章的核心观点：https://article-a.example/one https://article-b.example/two",
+      timestamp: now.toISOString(),
+      eventType: "message",
+      replyToMessageId: "113",
+    };
+    const fetchedPages: string[] = [];
+    let plannerInput = "";
+    let analysisInput = "";
+    const provider: AIProvider = {
+      generate: (request) => {
+        if (request.purpose === "intent") {
+          plannerInput = request.messages.at(-1)?.content ?? "";
+          return Promise.resolve({
+            text: JSON.stringify({ intent: "analyze", confidence: 0.98 }),
+            model: "test-model",
+            inputTokens: 10,
+            outputTokens: 5,
+          });
+        }
+        analysisInput = request.messages.at(-1)?.content ?? "";
+        return Promise.resolve({
+          text: "A 强调结构化记忆，B 强调按需检索。",
+          model: "test-model",
+          inputTokens: 30,
+          outputTokens: 15,
+        });
+      },
+    };
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("api.telegram.org")) {
+        if (typeof init?.body !== "string") throw new Error("Expected Telegram JSON body");
+        return Response.json({ ok: true, result: { message_id: 213 } });
+      }
+      fetchedPages.push(url);
+      const isA = url.includes("article-a");
+      return new Response(
+        `<html><head><title>${isA ? "Article A" : "Article B"}</title></head><body>${isA ? "Structured memory" : "On-demand retrieval"}</body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    };
+
+    await processIncoming(env, incoming, fetcher, now, provider);
+
+    expect(fetchedPages).toEqual(["https://article-a.example/one", "https://article-b.example/two"]);
+    expect(plannerInput).toContain("Article A");
+    expect(plannerInput).toContain("Structured memory");
+    expect(plannerInput).toContain("Article B");
+    expect(plannerInput).toContain("On-demand retrieval");
+    expect(analysisInput).toContain("Article A");
+    expect(analysisInput).toContain("Structured memory");
+    expect(analysisInput).toContain("Article B");
+    expect(analysisInput).toContain("On-demand retrieval");
   });
 });

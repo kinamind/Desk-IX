@@ -1,8 +1,7 @@
-import { z } from "zod";
 import { getConfig, isAIEnabled } from "../config";
 import { resolveScheduleChange, routeMessage } from "../ai/intent";
-import { OpenAICompatibleProvider, parseAIJson } from "../ai/openai-compatible";
-import { SECRETARY_STYLE, URL_ENRICHMENT_PROMPT } from "../ai/prompts";
+import { OpenAICompatibleProvider } from "../ai/openai-compatible";
+import { QUERY_RESPONSE_PROMPT, SECRETARY_STYLE } from "../ai/prompts";
 import type { AIProvider } from "../ai/provider";
 import { getChannelAdapter } from "../channels/registry";
 import {
@@ -23,23 +22,13 @@ import { failMessage, finishMessage, claimMessage, listRecentConversation } from
 import { setPendingAction, takePendingAction } from "../db/pending-actions";
 import { cancelOpenReminders } from "../db/reminders";
 import { listScheduleWindows } from "../db/schedule";
-import { discoverUrls, readWebPage } from "../url/reader";
+import { discoverUrls, readWebPagesFromText, type WebPageBatch } from "../url/reader";
 import { handleCallback } from "./callbacks";
-import { generateDeadlineMilestones } from "./milestones";
+import { enrichItemFromUrls, summarizeItemEnrichment, type ItemEnrichmentResult } from "./item-enrichment";
 import { scheduleReminder } from "./reminder-service";
 import { findAvailableReminderTime } from "./schedule";
 import type { CreateItemAgentAction, IncomingMessage, Item, OutgoingMessage, ParsedIntent, ReminderMode, ScheduleWindow } from "./types";
 import { log } from "../observability/log";
-
-const urlEnrichmentSchema = z.object({
-  title: z.string().nullable().optional(),
-  summary: z.string().nullable().optional(),
-  type: z.string().nullable().optional(),
-  tags: z.array(z.string()).optional().default([]),
-  organization: z.string().nullable().optional(),
-  venue: z.string().nullable().optional(),
-  potential_deadline: z.string().nullable().optional(),
-});
 
 export async function processIncoming(
   env: Env,
@@ -114,8 +103,21 @@ export async function processIncoming(
         const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId);
         const conversation = await listRecentConversation(env.DB, incoming.channel, incoming.userId);
         const schedule = await listScheduleWindows(env.DB, incoming.channel, incoming.userId, now);
-        const intent = await routeMessage(incoming.text, provider, now, config.timezone, contextItems, conversation, schedule);
-        const result = await executeIntent(env, incoming, intent, provider, fetcher, now, schedule);
+        const webObservation = await readWebPagesFromText(incoming.text, config, fetcher, 3);
+        for (const failure of webObservation.failures) {
+          log("warn", "web_reader_failed", { url: failure.requestedUrl, error: failure.error });
+        }
+        const intent = await routeMessage(
+          incoming.text,
+          provider,
+          now,
+          config.timezone,
+          contextItems,
+          conversation,
+          schedule,
+          webObservation.pages,
+        );
+        const result = await executeIntent(env, incoming, intent, provider, fetcher, now, schedule, webObservation);
         output = result.output;
         itemId = result.itemId;
       }
@@ -142,6 +144,7 @@ async function executeIntent(
   fetcher: typeof fetch,
   now: Date,
   schedule: ScheduleWindow[],
+  webObservation: WebPageBatch,
 ): Promise<{ output: OutgoingMessage; itemId: string | null }> {
   const config = getConfig(env);
   if (intent.intent === "clarify" || intent.intent === "unavailable") {
@@ -160,46 +163,47 @@ async function executeIntent(
 
   if (intent.intent === "query") {
     const items = await searchOwnedItems(env.DB, incoming.channel, incoming.userId, intent.query ?? { limit: 10 });
-    return { output: { text: formatSearchResults(items, config.timezone) }, itemId: null };
+    const answer = await answerQuery(incoming.text, items, provider, config.timezone, now);
+    return { output: { text: answer }, itemId: null };
   }
 
   if (intent.intent === "analyze") {
     if (!provider) return { output: { text: "AI 还未配置；设置 AI_API_KEY 后可以展开分析。" }, itemId: null };
-    let webContext: Record<string, unknown> | null = null;
     const contextItems = await listAgentContextItems(env.DB, incoming.channel, incoming.userId, 12);
-    const url = discoverUrls(incoming.text, 1)[0];
-    if (url) {
-      try {
-        const reading = await readWebPage(url, config, fetcher);
-        webContext = {
-          url: reading.finalUrl,
-          title: reading.title,
-          description: reading.description,
-          source: reading.source,
-          text: reading.text.slice(0, 12_000),
-        };
-      } catch (error) {
-        log("warn", "web_reader_failed", { url, error: error instanceof Error ? error.message : String(error) });
-      }
-    }
+    const webContext = webObservation.pages.map((page) => ({
+      url: page.finalUrl,
+      title: page.title,
+      description: page.description,
+      source: page.source,
+      text: page.text.slice(0, 6_000),
+    }));
     try {
       const response = await provider.generate({
         purpose: "analysis",
         maxTokens: Math.min(config.aiMaxTokens, 1200),
         messages: [
-          { role: "system", content: `${SECRETARY_STYLE}\n用户这次明确要求分析，可以展开，但保持结构清楚。若提供了网页正文，只根据真实正文分析。` },
+          {
+            role: "system",
+            content: `${SECRETARY_STYLE}\n用户这次明确要求分析，可以展开，但保持结构清楚。若提供了一个或多个网页正文，只根据真实正文并依照用户指令分析；比较请求必须覆盖所有成功读取的来源。\n当前时间：${now.toISOString()}\n用户时区：${config.timezone}\n展示日期与时间时必须转换到用户时区；没有明确证据的截止时间要说未知，不能补猜。`,
+          },
           {
             role: "user",
             content: JSON.stringify({
               message: incoming.text,
-              webpage: webContext,
-              recent_items: contextItems.map((item) => ({
-                id: item.id,
-                title: item.title,
-                content: item.content.slice(0, 500),
-                status: item.status,
-                due_at: item.dueAt,
-              })),
+              current_time: now.toISOString(),
+              timezone: config.timezone,
+              webpages: webContext,
+              recent_items: contextItems.map((item) => {
+                const enrichment = summarizeItemEnrichment(item.aiEnrichment);
+                return {
+                  id: item.id,
+                  title: item.title,
+                  content: item.content.slice(0, 500),
+                  status: item.status,
+                  due_at: item.dueAt,
+                  ...(enrichment ? { enrichment } : {}),
+                };
+              }),
             }),
           },
         ],
@@ -240,6 +244,7 @@ async function executeIntent(
         now,
         schedule,
         intent.avoidWindows ?? [],
+        webObservation,
       );
       confirmations.push(result.text);
       resultItemId ??= result.item.id;
@@ -315,10 +320,26 @@ async function executeIntent(
     let selectedUpdateReminderAt = reminderAt ?? null;
     let updateReminderAdjusted = false;
     await updateItem(env.DB, item.id, action, now);
+    let updatedItem = await getItem(env.DB, item.id) ?? item;
+    let enrichmentResult: ItemEnrichmentResult | null = null;
+    if (webObservation.requestedUrls.length > 0 || (action.content && discoverUrls(action.content, 1).length > 0)) {
+      const enriched = await enrichAndPersistItem(
+        env,
+        updatedItem,
+        incoming.text,
+        provider,
+        fetcher,
+        now,
+        false,
+        webObservation.requestedUrls.length > 0 ? webObservation : undefined,
+      );
+      updatedItem = enriched.item;
+      enrichmentResult = enriched.result;
+    }
     const changesReminder = Object.hasOwn(action, "reminderAt") || Object.hasOwn(action, "reminderMode");
     if (changesReminder) {
       if (reminderAt) {
-        const updatedDueAt = action.dueAt !== undefined ? action.dueAt : item.dueAt;
+        const updatedDueAt = action.dueAt !== undefined ? action.dueAt : updatedItem.dueAt;
         const availability = findAvailableReminderTime(reminderAt, {
           now,
           dueAt: updatedDueAt,
@@ -344,14 +365,19 @@ async function executeIntent(
         await cancelOpenReminders(env.DB, item.id);
       }
     }
-    const updated = await getItem(env.DB, item.id) ?? item;
     confirmations.push(selectedUpdateReminderAt
-      ? formatScheduleConfirmation(updated.title, updated.dueAt, selectedUpdateReminderAt, config.timezone, "已更新", reminderMode)
+      ? formatScheduleConfirmation(updatedItem.title, updatedItem.dueAt, selectedUpdateReminderAt, config.timezone, "已更新", reminderMode)
         + adjustmentSuffix(updateReminderAdjusted)
-      : `✓ 已更新：${updated.title}`);
+      : enrichmentResult
+        ? formatEnrichmentConfirmation(updatedItem, enrichmentResult, config.timezone)
+        : `✓ 已更新：${updatedItem.title}`);
   }
 
-  return { output: { text: confirmations.join("\n") }, itemId: resultItemId };
+  const reply = intent.reply?.trim();
+  return {
+    output: { text: reply ? `${confirmations.join("\n")}\n\n${reply}` : confirmations.join("\n") },
+    itemId: resultItemId,
+  };
 }
 
 async function executeCreateAction(
@@ -365,6 +391,7 @@ async function executeCreateAction(
   now: Date,
   schedule: ScheduleWindow[],
   avoidWindows: ScheduleWindow[],
+  webObservation: WebPageBatch,
 ): Promise<{ text: string; item: Item; reminderAt: string | null }> {
   const config = getConfig(env);
   const discoveredUrl = action.url ?? discoverUrls(incoming.text, 1)[0] ?? null;
@@ -392,46 +419,18 @@ async function executeCreateAction(
     }, now);
   }
 
-  let urlFetchFailed = false;
-  if (item.url) {
-    try {
-      const reading = await readWebPage(item.url, config, fetcher);
-      const enrichment: Record<string, unknown> = {};
-      if (provider && reading.text) {
-        try {
-          const response = await provider.generate({
-            purpose: "url_enrichment",
-            expectJson: true,
-            maxTokens: 400,
-            messages: [
-              { role: "system", content: URL_ENRICHMENT_PROMPT },
-              { role: "user", content: JSON.stringify({ url: reading.finalUrl, title: reading.title, description: reading.description, text: reading.text.slice(0, 12_000) }) },
-            ],
-          });
-          Object.assign(enrichment, urlEnrichmentSchema.parse(parseAIJson(response.text)), { provider: "openai-compatible", model: response.model });
-        } catch (error) {
-          log("warn", "url_ai_enrichment_failed", { itemId: item.id, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      await mergeItemEnrichment(env.DB, item.id, enrichment, {
-        fetched_url: reading.finalUrl,
-        canonical_url: reading.canonicalUrl,
-        source: reading.source,
-        description: reading.description,
-        reader: "basic-html",
-        truncated: reading.truncated,
-        fetch_status: "ok",
-      }, reading.title ?? undefined, now);
-      item = await getItem(env.DB, item.id) ?? item;
-    } catch (error) {
-      urlFetchFailed = true;
-      await mergeItemEnrichment(env.DB, item.id, {}, {
-        fetch_status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      }, undefined, now);
-      log("warn", "url_fetch_failed", { itemId: item.id, url: item.url, error: error instanceof Error ? error.message : String(error) });
-    }
-  }
+  const enriched = await enrichAndPersistItem(
+    env,
+    item,
+    incoming.text,
+    provider,
+    fetcher,
+    now,
+    true,
+    webObservation.requestedUrls.length > 0 ? webObservation : undefined,
+  );
+  item = enriched.item;
+  const urlFetchFailed = enriched.result !== null && enriched.result.readableSourceCount === 0;
 
   let selectedReminderAt: string | null = null;
   let reminderAdjusted = false;
@@ -454,29 +453,74 @@ async function executeCreateAction(
       target: { channel: incoming.channel, userId: incoming.userId },
     }, now);
   }
-  if (type === "project" && item.dueAt) {
-    for (const milestone of generateDeadlineMilestones(item.dueAt, now)) {
-      const availability = findAvailableReminderTime(milestone.remindAt, {
-        now,
-        dueAt: item.dueAt,
-        targetItemId: item.id,
-        schedule,
-        avoidWindows,
-      });
-      if (!availability.reminderAt) continue;
-      await scheduleReminder(env, {
-        itemId: item.id,
-        remindAt: availability.reminderAt,
-        kind: `milestone-${milestone.label}`,
-        target: { channel: incoming.channel, userId: incoming.userId },
-      }, now);
-      schedule.push(reminderWindow(item, availability.reminderAt));
-    }
-  }
-
-  const text = confirmation(item, selectedReminderAt, action.reminderMode, urlFetchFailed, config.timezone)
+  const text = (enriched.result && !selectedReminderAt
+    ? formatEnrichmentConfirmation(item, enriched.result, config.timezone)
+    : confirmation(item, selectedReminderAt, action.reminderMode, urlFetchFailed, config.timezone))
     + adjustmentSuffix(reminderAdjusted);
   return { text, item, reminderAt: selectedReminderAt };
+}
+
+async function enrichAndPersistItem(
+  env: Env,
+  item: Item,
+  message: string,
+  provider: AIProvider | null,
+  fetcher: typeof fetch,
+  now: Date,
+  promoteEnrichedTitle: boolean,
+  observedPages?: WebPageBatch,
+): Promise<{ item: Item; result: ItemEnrichmentResult | null }> {
+  const result = await enrichItemFromUrls(item, message, provider, getConfig(env), fetcher, observedPages);
+  if (!result) return { item, result: null };
+
+  const tags = [...new Set([...item.tags, ...result.dossier.tags])].slice(0, 12);
+  await mergeItemEnrichment(env.DB, item.id, {
+    ...item.aiEnrichment,
+    ...result.dossier,
+  }, {
+    ...item.metadata,
+    reader: "basic-html",
+    web_sources: result.sources,
+    readable_source_count: result.readableSourceCount,
+    failed_source_count: result.failedSourceCount,
+    fetch_status: result.readableSourceCount > 0 ? "ok" : "failed",
+  }, {
+    ...(promoteEnrichedTitle && result.dossier.title ? { title: result.dossier.title } : {}),
+    primaryUrl: result.primaryUrl,
+    ...(result.dossier.deadline ? { dueAtIfMissing: result.dossier.deadline } : {}),
+    tags,
+  }, now);
+  return { item: await getItem(env.DB, item.id) ?? item, result };
+}
+
+function formatEnrichmentConfirmation(item: Item, result: ItemEnrichmentResult, timezone: string): string {
+  if (result.dossier.category === "recruitment") {
+    const lines = [`✓ 已整理招聘信息：${item.title}`];
+    if (result.dossier.organizations.length > 0) lines.push(`机构：${result.dossier.organizations.join("、")}`);
+    if (result.dossier.roles.length > 0) lines.push(`岗位：${result.dossier.roles.join("、")}`);
+    if (item.dueAt) lines.push(`截止：${formatConfirmation(item.dueAt, timezone)}`);
+    lines.push(`来源：已读取 ${result.readableSourceCount}/${result.sources.length} 个网页`);
+    return lines.join("\n");
+  }
+  if (result.readableSourceCount === 0) return "✓ 已保存链接（网页暂时无法解析）。";
+  const labels: Record<string, string> = {
+    application: "申请信息",
+    event: "活动信息",
+    article: "文章",
+    paper: "论文",
+    documentation: "文档",
+    tool: "工具信息",
+    product: "产品信息",
+    resource: "链接",
+    other: "链接",
+  };
+  const label = result.dossier.category ? labels[result.dossier.category] ?? "链接" : "链接";
+  const lines = [`✓ 已整理${label}：${item.title}`];
+  if (result.dossier.summary) lines.push(`摘要：${result.dossier.summary}`);
+  if (result.dossier.key_points.length > 0) lines.push(`要点：${result.dossier.key_points.slice(0, 3).join("；")}`);
+  if (item.dueAt) lines.push(`截止：${formatConfirmation(item.dueAt, timezone)}`);
+  lines.push(`来源：已读取 ${result.readableSourceCount}/${result.sources.length} 个网页`);
+  return lines.join("\n");
 }
 
 function reminderWindow(item: Item, reminderAt: string): ScheduleWindow {
@@ -534,6 +578,54 @@ function formatDuration(minutes: number): string {
   if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)} 天`;
   if (minutes % 60 === 0) return `${minutes / 60} 小时`;
   return `${minutes} 分钟`;
+}
+
+async function answerQuery(
+  message: string,
+  items: Item[],
+  provider: AIProvider | null,
+  timezone: string,
+  now: Date,
+): Promise<string> {
+  const fallback = formatSearchResults(items, timezone);
+  if (!provider || items.length === 0) return fallback;
+  try {
+    const response = await provider.generate({
+      purpose: "query_response",
+      maxTokens: 900,
+      messages: [
+        {
+          role: "system",
+          content: `${QUERY_RESPONSE_PROMPT}\n当前时间：${now.toISOString()}\n用户时区：${timezone}`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            question: message.slice(0, 2_000),
+            tool_results: items.slice(0, 20).map((item) => {
+              const enrichment = summarizeItemEnrichment(item.aiEnrichment);
+              return {
+                id: item.id,
+                type: item.type,
+                title: item.title,
+                content: item.content.slice(0, 500),
+                url: item.url,
+                tags: item.tags.slice(0, 8),
+                status: item.status,
+                priority: item.priority,
+                due_at: item.dueAt,
+                ...(enrichment ? { enrichment } : {}),
+              };
+            }),
+          }),
+        },
+      ],
+    });
+    return response.text.trim().slice(0, 3_500) || `模型这次没能整理检索结果，先给你可核对的记录：\n${fallback}`;
+  } catch (error) {
+    log("warn", "query_response_failed", { error: error instanceof Error ? error.message : String(error) });
+    return `模型这次没能整理检索结果，先给你可核对的记录：\n${fallback}`;
+  }
 }
 
 function formatSearchResults(items: Item[], timezone: string): string {

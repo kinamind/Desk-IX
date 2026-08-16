@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveScheduleChange, routeMessage } from "../src/ai/intent";
 import type { AIProvider } from "../src/ai/provider";
 import type { Item, ScheduleWindow } from "../src/core/types";
-import { generateDeadlineMilestones } from "../src/core/milestones";
+import type { WebPageReading } from "../src/url/reader";
 
 const now = new Date("2026-08-15T04:30:00.000Z");
 
@@ -225,14 +225,89 @@ describe("AI-first routing", () => {
       question: null,
     });
   });
-});
 
-describe("deadline milestones", () => {
-  it("creates at most three future milestones", () => {
-    expect(generateDeadlineMilestones("2026-10-15T02:00:00.000Z", now)).toEqual([
-      { label: "开始准备", remindAt: "2026-09-15T02:00:00.000Z" },
-      { label: "完成主要工作", remindAt: "2026-10-08T02:00:00.000Z" },
-      { label: "最终检查", remindAt: "2026-10-14T02:00:00.000Z" },
-    ]);
+  it("provides bounded recruitment enrichment to the planner", async () => {
+    const recruitment: Item = {
+      id: "59e020fd-14de-41fa-b1e9-46ce4ac59c49",
+      type: "note",
+      title: "深圳理工大学人工智能研究院招聘",
+      content: "三条招聘来源链接",
+      rawMessage: "记录一下招聘信息",
+      url: "https://jobs.example/notice",
+      tags: ["招聘", "人工智能", "深圳"],
+      status: "open",
+      priority: "normal",
+      estimatedDuration: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      completedAt: null,
+      dueAt: "2026-08-31T15:59:59.000Z",
+      startAfter: null,
+      originalTimeExpression: null,
+      sourceChannel: "qq",
+      sourceUserId: "me",
+      sourceMessageId: "recruitment",
+      sourceActionIndex: 0,
+      aiEnrichment: {
+        category: "recruitment",
+        summary: "人工智能研究院招聘教学科研人员。",
+        organizations: ["深圳理工大学人工智能研究院"],
+        roles: ["教学科研人员"],
+        locations: ["深圳"],
+        deadline: "2026-08-31T15:59:59.000Z",
+        source_urls: ["https://jobs.example/notice"],
+        ignored_private_detail: "should-not-be-sent",
+      },
+      metadata: { reader_error: "should-not-be-sent" },
+      parentId: null,
+      embeddingId: null,
+    };
+    const calls: string[] = [];
+
+    await routeMessage("现在有哪些招聘信息？", jsonProvider({
+      intent: "query",
+      query: { keyword: "招聘", limit: 10 },
+      confidence: 0.96,
+    }, calls), now, "Asia/Singapore", [recruitment]);
+
+    expect(calls[0]).toContain("深圳理工大学人工智能研究院");
+    expect(calls[0]).toContain("organizations");
+    expect(calls[0]).toContain("source_urls");
+    expect(calls[0]).not.toContain("ignored_private_detail");
+    expect(calls[0]).not.toContain("reader_error");
+  });
+
+  it("receives webpage observations before deciding what action to take", async () => {
+    const calls: string[] = [];
+    const webpages: WebPageReading[] = [{
+      requestedUrl: "https://paper.example/method",
+      finalUrl: "https://paper.example/method",
+      title: "Agent Memory Paper",
+      description: "A paper about memory",
+      canonicalUrl: null,
+      source: "paper.example",
+      text: "We propose a bounded episodic retrieval method and evaluate it on three tasks.",
+      truncated: false,
+    }];
+
+    await routeMessage(
+      "记录这篇论文，重点看方法 https://paper.example/method",
+      jsonProvider({
+        intent: "act",
+        actions: [{ action: "create_item", type: "resource", title: "Agent Memory Paper", content: "有界情景检索方法" }],
+        confidence: 0.97,
+      }, calls),
+      now,
+      "Asia/Singapore",
+      [],
+      [],
+      [],
+      webpages,
+    );
+
+    expect(calls[0]).toContain("webpages");
+    expect(calls[0]).toContain("Agent Memory Paper");
+    expect(calls[0]).toContain("bounded episodic retrieval method");
+    expect(calls[0]).toContain("重点看方法");
   });
 });
