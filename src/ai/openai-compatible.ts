@@ -3,6 +3,7 @@ import type { RuntimeConfig } from "../config";
 import { getAIRequests, recordAIUsage } from "../db/ai-usage";
 import { localDate } from "../core/time";
 import { AIUnavailableError, type AIProvider, type AIRequest, type AIResponse } from "./provider";
+import { usesMaxCompletionTokens } from "./token-parameters";
 
 const responseSchema = z.object({
   model: z.string().optional(),
@@ -33,7 +34,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       messages: request.messages,
     };
     const maxTokens = Math.min(request.maxTokens ?? this.config.aiMaxTokens, this.config.aiMaxTokens);
-    if (usesModernTokenParameter(this.config.aiModel)) {
+    if (usesMaxCompletionTokens(this.config.aiModel)) {
       body.max_completion_tokens = maxTokens;
     } else {
       body.temperature = request.temperature ?? 0.1;
@@ -101,10 +102,6 @@ class ProviderHttpError extends Error {
     super(`AI provider returned HTTP ${status}${details ? `: ${details}` : ""}`);
     this.name = "ProviderHttpError";
   }
-}
-
-function usesModernTokenParameter(model: string): boolean {
-  return /^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$)|codex(?:[.-]|$))/i.test(model);
 }
 
 async function readResponseSnippet(response: Response, maxBytes = 2_048): Promise<string> {

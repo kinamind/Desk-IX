@@ -97,7 +97,6 @@ export class ComposaAgent extends Think<Env> {
       activeTools: ACTIVE_TOOLS,
       instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆。当前本地时间：${new Intl.DateTimeFormat(config.locale, { timeZone: config.timezone, dateStyle: "full", timeStyle: "long" }).format(new Date())}。${pendingContext}`,
       maxSteps: this.maxSteps,
-      maxOutputTokens: config.aiMaxTokens,
       maxRetries: 1,
       timeout: {
         stepMs: config.aiTimeoutMs,

@@ -95,7 +95,7 @@ curl http://127.0.0.1:8787/health
 | `AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 根地址 |
 | `AI_MODEL` | `gpt-4.1-mini` | 支持 OpenAI tool calls 的模型名 |
 | `AI_EMBEDDING_MODEL` | 空 | 第二阶段预留，MVP 不使用 |
-| `AI_MAX_TOKENS` | `600` | 单次输出上限 |
+| `AI_MAX_TOKENS` | `600` | 摘要、日计划等非 Agent 短生成的单次输出上限 |
 | `AI_TIMEOUT_MS` | `15000` | 单次 AI 请求超时 |
 | `AI_DAILY_REQUEST_LIMIT` | `100` | 按新加坡本地日期统计的日请求上限 |
 | `URL_FETCH_TIMEOUT_MS` | `6000` | 网页获取超时 |

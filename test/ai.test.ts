@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
+import { generateText } from "ai";
 import { describe, expect, it } from "vitest";
 import { OpenAICompatibleProvider } from "../src/ai/openai-compatible";
+import { createComposaModel } from "../src/agent/model";
 import { getAIRequests } from "../src/db/ai-usage";
 import { testConfig } from "./helpers";
 
@@ -90,3 +92,73 @@ describe("OpenAI-compatible provider", () => {
     await expect(provider.generate(request)).resolves.toMatchObject({ model: "test-model" });
   });
 });
+
+describe("Agent model provider contract", () => {
+  it("does not impose a completion-token cap on agent turns", async () => {
+    let body: Record<string, unknown> | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body");
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return agentModelResponse();
+    };
+
+    await generateText({
+      model: createComposaModel(agentModelEnv(), fetcher),
+      prompt: "hello",
+    });
+
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("sends max_completion_tokens for GPT-5 through the native agent model", async () => {
+    let body: Record<string, unknown> | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body");
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      return agentModelResponse();
+    };
+
+    await generateText({
+      model: createComposaModel(agentModelEnv(), fetcher),
+      prompt: "hello",
+      maxOutputTokens: 600,
+    });
+
+    expect(body).toMatchObject({ model: "gpt-5.6-luna", max_completion_tokens: 600 });
+    expect(body).not.toHaveProperty("max_tokens");
+  });
+});
+
+function agentModelEnv(): Env {
+  return {
+    APP_NAME: "Composa",
+    APP_LOCALE: "zh-CN",
+    TIMEZONE: "Asia/Singapore",
+    DAILY_PLAN_TIME: "08:00",
+    AI_BASE_URL: "https://gateway.test/v1",
+    AI_MODEL: "gpt-5.6-luna",
+    AI_EMBEDDING_MODEL: "",
+    AI_MAX_TOKENS: "600",
+    AI_TIMEOUT_MS: "15000",
+    AI_DAILY_REQUEST_LIMIT: "100",
+    AI_API_KEY: "test-key",
+    URL_FETCH_TIMEOUT_MS: "6000",
+    URL_MAX_BYTES: "524288",
+    QQ_API_BASE_URL: "https://api.bot.qq.com",
+  } as unknown as Env;
+}
+
+function agentModelResponse(): Response {
+  return Response.json({
+    id: "chatcmpl-test",
+    created: 1,
+    model: "gpt-5.6-luna",
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: "ok" },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+  });
+}
