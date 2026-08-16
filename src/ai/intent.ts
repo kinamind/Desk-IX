@@ -10,6 +10,8 @@ import {
   type ItemSearchFilters,
   type ParsedIntent,
   type ReminderMode,
+  type ScheduleWindow,
+  type SetReminderAgentAction,
   type UpdateItemAgentAction,
 } from "../core/types";
 import { log } from "../observability/log";
@@ -66,11 +68,26 @@ const updateActionSchema = z.object({
   original_time_expression: z.string().max(200).optional().nullable(),
 });
 
-const aiActionSchema = z.discriminatedUnion("action", [createActionSchema, targetActionSchema, updateActionSchema]);
+const setReminderActionSchema = z.object({
+  action: z.enum(["set_reminder", "reschedule_item", "update_reminder"]),
+  target_item_id: z.string().uuid(),
+  reminder_at: isoDate.optional().nullable(),
+  reminder_mode: z.enum(REMINDER_MODES).optional().nullable(),
+  original_time_expression: z.string().max(200).optional().nullable(),
+});
+
+const avoidWindowSchema = z.object({
+  start_at: isoDate,
+  end_at: isoDate.optional().nullable(),
+  reason: z.string().min(1).max(100).optional().nullable(),
+});
+
+const aiActionSchema = z.discriminatedUnion("action", [createActionSchema, targetActionSchema, updateActionSchema, setReminderActionSchema]);
 
 const aiIntentSchema = z.object({
   intent: z.enum(["act", "query", "analyze", "respond", "help", "clarify"]),
   actions: z.array(aiActionSchema).max(5).optional().nullable(),
+  avoid_windows: z.array(avoidWindowSchema).max(10).optional().nullable(),
   query: aiQuerySchema,
   reply: z.string().max(800).optional().nullable(),
   clarification_question: z.string().max(300).optional().nullable(),
@@ -82,6 +99,7 @@ const scheduleSchema = z.object({
   reminder_at: isoDate.optional().nullable(),
   reminder_mode: z.enum(REMINDER_MODES).optional().nullable(),
   original_time_expression: z.string().max(200).optional().nullable(),
+  avoid_windows: z.array(avoidWindowSchema).max(10).optional().nullable(),
   clarification_question: z.string().max(300).optional().nullable(),
 });
 
@@ -90,6 +108,7 @@ export interface ScheduleResolution {
   reminderAt: string | null;
   reminderMode: ReminderMode | null;
   originalTimeExpression: string | null;
+  avoidWindows: ScheduleWindow[];
   question: string | null;
 }
 
@@ -194,6 +213,28 @@ function normalizeUpdateAction(
   };
 }
 
+function normalizeSetReminderAction(
+  action: z.infer<typeof setReminderActionSchema>,
+  now: Date,
+  contextItems: Item[],
+): { action: SetReminderAgentAction; reminderRejected: boolean; reminderMissing: boolean } {
+  const dueAt = contextItems.find((item) => item.id === action.target_item_id)?.dueAt ?? null;
+  const reminder = normalizeReminder(action.reminder_at, dueAt, now, action.reminder_mode);
+  const mode = action.reminder_mode ?? "deferred_action";
+  const modeNeedsReminder = mode !== "none" && mode !== "explicit_now";
+  return {
+    action: {
+      action: "set_reminder",
+      targetItemId: action.target_item_id,
+      reminderAt: reminder.value,
+      reminderMode: mode,
+      ...(Object.hasOwn(action, "original_time_expression") ? { originalTimeExpression: action.original_time_expression ?? null } : {}),
+    },
+    reminderRejected: reminder.rejected,
+    reminderMissing: modeNeedsReminder && reminder.value === null,
+  };
+}
+
 function normalizeActions(
   actions: z.infer<typeof aiIntentSchema>["actions"],
   now: Date,
@@ -210,6 +251,10 @@ function normalizeActions(
       const result = normalizeUpdateAction(action, now, contextItems);
       normalized.push(result.action);
       needsRepair ||= result.reminderRejected;
+    } else if (action.action === "set_reminder" || action.action === "reschedule_item" || action.action === "update_reminder") {
+      const result = normalizeSetReminderAction(action, now, contextItems);
+      normalized.push(result.action);
+      needsRepair ||= result.reminderRejected || result.reminderMissing;
     } else {
       normalized.push({ action: action.action, targetItemId: action.target_item_id });
     }
@@ -217,7 +262,7 @@ function normalizeActions(
   return { actions: normalized, needsRepair };
 }
 
-function summarizeContext(items: Item[]): Array<Record<string, unknown>> {
+function summarizeContext(items: Item[], schedule: ScheduleWindow[]): Array<Record<string, unknown>> {
   return items.slice(0, 20).map((item) => ({
     id: item.id,
     type: item.type,
@@ -228,24 +273,56 @@ function summarizeContext(items: Item[]): Array<Record<string, unknown>> {
     due_at: item.dueAt,
     updated_at: item.updatedAt,
     tags: item.tags.slice(0, 8),
+    current_reminder_at: schedule
+      .filter((window) => window.source === "reminder" && window.itemId === item.id)
+      .map((window) => window.startAt),
   }));
 }
 
-function buildModelInput(message: string, items: Item[], conversation: ConversationTurn[]): string {
-  const recentItems = summarizeContext(items);
+function buildModelInput(message: string, items: Item[], conversation: ConversationTurn[], schedule: ScheduleWindow[]): string {
+  const recentItems = summarizeContext(items, schedule);
   const recentConversation = conversation.slice(-6).map((turn) => ({
     user: turn.user.slice(0, 1_000),
     assistant: turn.assistant.slice(0, 1_000),
     received_at: turn.receivedAt,
   }));
+  const scheduleContext = schedule.slice(0, 60).map((window) => ({
+    item_id: window.itemId,
+    title: window.title,
+    start_at: window.startAt,
+    end_at: window.endAt,
+    source: window.source,
+  }));
   const boundedMessage = message.slice(0, 6_000);
-  while (recentItems.length > 0 || recentConversation.length > 0) {
-    const candidate = JSON.stringify({ message: boundedMessage, recent_items: recentItems, recent_conversation: recentConversation });
+  while (recentItems.length > 0 || recentConversation.length > 0 || scheduleContext.length > 0) {
+    const candidate = JSON.stringify({
+      message: boundedMessage,
+      recent_items: recentItems,
+      recent_conversation: recentConversation,
+      schedule: scheduleContext,
+    });
     if (candidate.length <= MAX_MODEL_INPUT_CHARS) return candidate;
     if (recentConversation.length > 2) recentConversation.shift();
-    else recentItems.pop();
+    else if (recentItems.length > 5) recentItems.pop();
+    else scheduleContext.pop();
   }
-  return JSON.stringify({ message: boundedMessage, recent_items: [], recent_conversation: [] });
+  return JSON.stringify({ message: boundedMessage, recent_items: [], recent_conversation: [], schedule: [] });
+}
+
+function normalizeAvoidWindows(windows: Array<z.infer<typeof avoidWindowSchema>> | null | undefined): ScheduleWindow[] {
+  return (windows ?? []).map((window) => {
+    const startAt = new Date(window.start_at).toISOString();
+    const startTime = new Date(startAt).getTime();
+    const parsedEnd = window.end_at ? new Date(window.end_at).getTime() : startTime + 60 * 60_000;
+    const endAt = new Date(parsedEnd > startTime ? parsedEnd : startTime + 60 * 60_000).toISOString();
+    return {
+      itemId: null,
+      title: window.reason?.trim() || "用户已有安排",
+      startAt,
+      endAt,
+      source: "message",
+    };
+  });
 }
 
 export async function routeMessage(
@@ -255,6 +332,7 @@ export async function routeMessage(
   timezone = "Asia/Singapore",
   contextItems: Item[] = [],
   conversation: ConversationTurn[] = [],
+  schedule: ScheduleWindow[] = [],
 ): Promise<ParsedIntent> {
   const trimmed = text.trim();
   if (/^\/?(?:help|帮助|使用说明)$/i.test(trimmed)) {
@@ -262,7 +340,7 @@ export async function routeMessage(
   }
   if (!provider) return unavailableIntent();
 
-  const input = buildModelInput(trimmed, contextItems, conversation);
+  const input = buildModelInput(trimmed, contextItems, conversation, schedule);
 
   try {
     let response = await provider.generate({
@@ -304,6 +382,7 @@ export async function routeMessage(
     return {
       intent: parsed.intent,
       ...(parsed.intent === "act" ? { actions: normalized.actions } : {}),
+      ...(parsed.avoid_windows?.length ? { avoidWindows: normalizeAvoidWindows(parsed.avoid_windows) } : {}),
       ...(parsed.intent === "query" ? { query: normalizeQuery(parsed.query) } : {}),
       ...(parsed.reply ? { reply: parsed.reply } : {}),
       confidence: parsed.confidence,
@@ -311,7 +390,7 @@ export async function routeMessage(
       aiEnrichment: {
         provider: "openai-compatible",
         model: response.model,
-        generated_fields: ["intent", "actions", "query", "reply"],
+        generated_fields: ["intent", "actions", "avoid_windows", "query", "reply"],
         context_item_count: contextItems.length,
       },
     };
@@ -329,7 +408,7 @@ export async function resolveScheduleChange(
   timezone = "Asia/Singapore",
 ): Promise<ScheduleResolution> {
   if (!provider) {
-    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, question: "模型暂时不可用，原时间没有修改。" };
+    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, avoidWindows: [], question: "模型暂时不可用，原时间没有修改。" };
   }
   try {
     const response = await provider.generate({
@@ -350,10 +429,11 @@ export async function resolveScheduleChange(
       reminderAt,
       reminderMode: parsed.reminder_mode ?? null,
       originalTimeExpression: parsed.original_time_expression ?? text.slice(0, 200),
+      avoidWindows: normalizeAvoidWindows(parsed.avoid_windows),
       question,
     };
   } catch (error) {
     log("warn", "ai_reschedule_failed", { error: error instanceof Error ? error.message : String(error) });
-    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, question: "模型这次没有成功理解，原时间没有修改。" };
+    return { dueAt: null, reminderAt: null, reminderMode: null, originalTimeExpression: null, avoidWindows: [], question: "模型这次没有成功理解，原时间没有修改。" };
   }
 }

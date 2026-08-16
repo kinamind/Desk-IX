@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { handleCallback } from "../src/core/callbacks";
 import type { IncomingMessage, ReminderWorkflowPayload } from "../src/core/types";
 import { createItem, getItem } from "../src/db/items";
+import { createReminder } from "../src/db/reminders";
 
 class FakeWorkflowInstance implements WorkflowInstance {
   public constructor(public id: string) {}
@@ -76,6 +77,13 @@ describe("callback business actions", () => {
 
   it("creates one Workflow-backed Later reminder", async () => {
     const item = await createTask("callback-later");
+    await createReminder(env.DB, {
+      itemId: item.id,
+      remindAt: "2026-08-15T02:30:00.000Z",
+      kind: "deferred_action",
+      targetChannel: "telegram",
+      targetUserId: "42",
+    }, now);
     const workflow = new FakeWorkflow();
     const callbackEnv: Env = { ...env, REMINDER_WORKFLOW: workflow };
     const result = await handleCallback(callbackEnv, callbackMessage(item.id, "later", "1h"), now);
@@ -84,8 +92,13 @@ describe("callback business actions", () => {
     const params = workflow.creates[0]?.params;
     expect(typeof params?.reminderId).toBe("string");
     expect(params?.remindAt).toBe("2026-08-15T03:00:00.000Z");
-    const row = await env.DB.prepare("SELECT status, remind_at, workflow_id FROM reminders WHERE item_id = ?").bind(item.id).first();
-    expect(row).toMatchObject({ status: "pending", remind_at: "2026-08-15T03:00:00.000Z" });
+    const rows = await env.DB.prepare(
+      "SELECT status, remind_at, workflow_id FROM reminders WHERE item_id = ? ORDER BY remind_at ASC",
+    ).bind(item.id).all<{ status: string; remind_at: string; workflow_id: string | null }>();
+    expect(rows.results).toEqual([
+      expect.objectContaining({ status: "canceled", remind_at: "2026-08-15T02:30:00.000Z" }),
+      expect.objectContaining({ status: "pending", remind_at: "2026-08-15T03:00:00.000Z" }),
+    ]);
   });
 
   it("archives an item without deleting it and can restore it", async () => {
@@ -106,5 +119,27 @@ describe("callback business actions", () => {
     const result = await handleCallback(env, incoming, now);
     expect(result).toMatchObject({ acknowledgeCode: 1, itemId: null });
     expect(await getItem(env.DB, item.id)).toMatchObject({ status: "open" });
+  });
+
+  it("moves Later past another scheduled item", async () => {
+    const item = await createTask("callback-later-conflict");
+    await createItem(env.DB, {
+      type: "task",
+      title: "三点会议",
+      content: "三点会议",
+      rawMessage: "三点会议",
+      sourceChannel: "telegram",
+      sourceUserId: "42",
+      sourceMessageId: "callback-busy-meeting",
+      dueAt: "2026-08-15T03:00:00.000Z",
+      estimatedDuration: 60,
+    }, now);
+    const workflow = new FakeWorkflow();
+    const callbackEnv: Env = { ...env, REMINDER_WORKFLOW: workflow };
+
+    const result = await handleCallback(callbackEnv, callbackMessage(item.id, "later", "1h"), now);
+
+    expect(result.output.text).toContain("已避开日程冲突");
+    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T04:15:00.000Z");
   });
 });
