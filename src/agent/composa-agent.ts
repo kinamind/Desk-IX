@@ -37,6 +37,8 @@ import {
   type LifecycleFollowupPayload,
 } from "./followups";
 import { buildProfileContext, buildSystemPrompt } from "./prompt";
+import { CALENDAR_SKILL_NAMES, calendarSkillSource } from "./skills/calendar";
+import { createCalendarTools } from "./tools/calendar";
 import { createReadTools } from "./tools/read";
 import { createWriteActions } from "./tools/write";
 import { incomingAgentMessageSchema, type IncomingAgentMessage, type RuntimeProfile } from "./types";
@@ -45,7 +47,10 @@ const ACTIVE_TOOLS = [
   "memory_search",
   "item_get",
   "web_read",
-  "schedule_list",
+  "calendar_snapshot",
+  "availability_find",
+  "activate_skill",
+  "read_skill_resource",
   "profile_get",
   "item_create",
   "item_update",
@@ -88,8 +93,16 @@ export class ComposaAgent extends Think<Env> {
     return buildSystemPrompt();
   }
 
+  override getSkills() {
+    return [calendarSkillSource];
+  }
+
   override getTools(): ToolSet {
-    return createReadTools(this.env, () => parseTurnPrincipal(this.activeTurnMetadata));
+    const principal = () => parseTurnPrincipal(this.activeTurnMetadata);
+    return {
+      ...createReadTools(this.env, principal),
+      ...createCalendarTools(this.env, principal),
+    };
   }
 
   override getActions() {
@@ -352,6 +365,7 @@ export class ComposaAgent extends Think<Env> {
       sessionReady: Boolean(this.session),
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
+      skills: [...CALENDAR_SKILL_NAMES],
     };
   }
 }

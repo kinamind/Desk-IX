@@ -1,9 +1,12 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { buildDailyPlan, listDueDailyPlanProfiles, shouldRunDailyPlan } from "../src/core/daily-plan";
 import { claimDailyPlanRun, failDailyPlanRun } from "../src/db/daily-plan-runs";
 import { createItem } from "../src/db/items";
+import { createReminder } from "../src/db/reminders";
 import { ensureUserProfile, updateUserProfile } from "../src/db/user-profiles";
+import { replaceWorkSessions } from "../src/db/work-sessions";
 
 const now = new Date("2026-08-15T02:00:00.000Z");
 
@@ -160,5 +163,82 @@ describe("daily planning", () => {
     expect(requestBody).toContain("末尾关键限制：必须避开组会");
     expect(plan).toBe(longPlan);
     expect(plan.length).toBe(3_000);
+  });
+
+  it("gives the daily planner canonical events, deadlines, work sessions, reminders, and conflicts", async () => {
+    const userId = "canonical-calendar-plan";
+    const event = await createItem(env.DB, {
+      type: "task",
+      title: "固定组会",
+      content: "必须参加",
+      rawMessage: "固定组会",
+      dueAt: "2026-08-15T06:00:00.000Z",
+      estimatedDuration: 120,
+      temporalRole: "event",
+      sourceChannel: "qq",
+      sourceUserId: userId,
+      sourceMessageId: "canonical-plan-event",
+    }, now);
+    const deadline = await createItem(env.DB, {
+      type: "task",
+      title: "提交报告",
+      content: "当天截止",
+      rawMessage: "提交报告",
+      dueAt: "2026-08-15T12:00:00.000Z",
+      estimatedDuration: 120,
+      temporalRole: "deadline",
+      sourceChannel: "qq",
+      sourceUserId: userId,
+      sourceMessageId: "canonical-plan-deadline",
+    }, now);
+    await replaceWorkSessions(env.DB, deadline.id, [{
+      startAt: "2026-08-15T07:00:00.000Z",
+      endAt: "2026-08-15T09:00:00.000Z",
+      label: "完成报告",
+    }], "截止前完成", now);
+    await createReminder(env.DB, {
+      itemId: deadline.id,
+      remindAt: "2026-08-15T05:00:00.000Z",
+      kind: "deadline_warning",
+      targetChannel: "qq",
+      targetUserId: userId,
+    }, now);
+    let requestBody = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      requestBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json({
+        model: "test-model",
+        choices: [{ message: { content: "已按真实日程整理" } }],
+      });
+    };
+    const aiEnv = {
+      ...env,
+      AI_API_KEY: "test-key",
+      AI_MODEL: "test-model",
+      AI_DAILY_REQUEST_LIMIT: "0",
+    } as unknown as Env;
+
+    await buildDailyPlan(aiEnv, now, fetcher, { channel: "qq", userId });
+
+    const request = z.object({
+      messages: z.array(z.object({ role: z.string(), content: z.string() })),
+    }).parse(JSON.parse(requestBody) as unknown);
+    const context = z.object({
+      calendar: z.object({
+        entries: z.array(z.object({
+          itemId: z.string(),
+          kind: z.enum(["event", "deadline", "work_session", "reminder"]),
+          blocksTime: z.boolean(),
+        })),
+        conflicts: z.array(z.unknown()),
+      }),
+    }).parse(JSON.parse(request.messages.at(-1)?.content ?? "null") as unknown);
+    expect(context.calendar.entries).toEqual(expect.arrayContaining([
+      { itemId: event.id, kind: "event", blocksTime: true },
+      { itemId: deadline.id, kind: "deadline", blocksTime: false },
+      { itemId: deadline.id, kind: "work_session", blocksTime: true },
+      { itemId: deadline.id, kind: "reminder", blocksTime: false },
+    ]));
+    expect(context.calendar.conflicts).toHaveLength(1);
   });
 });

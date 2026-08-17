@@ -24,6 +24,8 @@ Desk-IX 是一个长期待在聊天工具里的轻量个人 Agent：每个用户
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
 - 新建或改动提醒时读取该用户在 Desk-IX 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
 - 明确区分截止日期、固定事件、提醒和实际工作时段；大块工作由模型结合真实日程与作息自主拆段，D1 保存可冲突检测的工作时段
+- 四个按需内部日历技能：查看、规划、管理、复盘；只有时间相关对话才加载详细流程，常规聊天不被日程提示词淹没
+- 统一日历快照同时呈现事件、截止、工作时段与提醒，返回真实冲突；空档查询可覆盖用户要求的任意明确范围，并返回全部合格区间供 Agent 判断
 - Agent 工具循环不设步骤数上限；模型自然完成时结束，只有请求失效、真实运行错误或无进展恢复才中止
 - Cloudflare Workflows 一次性提醒；提醒策略由模型根据事项语义和期限决定，不按项目类型硬塞固定里程碑
 - Cron 驱动、D1 事实驱动的个性化 Daily Plan；按每位用户自己的时区和偏好时间发送，并避开已有日程
@@ -44,7 +46,7 @@ flowchart LR
   QQ["QQ Bot"] --> WH
   WH --> DO["Per-user Durable Agent Session"]
   DO --> AI["Native Model / Tool Loop"]
-  AI --> TOOLS["12 Scoped Desk-IX Tools"]
+  AI --> TOOLS["Scoped Desk-IX Tools + On-demand Calendar Skills"]
   TOOLS --> AI
   TOOLS --> D1[("D1 Domain Memory")]
   TOOLS --> WEB["Bounded Web Reader"]
@@ -142,7 +144,7 @@ npm run check
 npm run deploy:dry
 ```
 
-测试运行在真实 Workers runtime + 本地隔离 D1/Durable Object 中，覆盖原生多步工具循环、会话运行时约束、个人档案、记忆检索、网页读取、原记录更新、完成/舍弃/恢复、提醒避让、用户隔离、重复 webhook、Workflow、callback、每用户时区、Telegram/QQ 授权、QQ 卡片 URL 与 Daily Plan。
+测试运行在真实 Workers runtime + 本地隔离 D1/Durable Object 中，覆盖原生多步工具循环、按需技能激活、统一内部日历、跨午夜空档、冲突检测、个人档案、记忆检索、网页读取、原记录更新、完成/舍弃/恢复、提醒避让、用户隔离、重复 webhook、Workflow、callback、每用户时区、Telegram/QQ 授权、QQ 卡片 URL 与 Daily Plan。
 
 ## 项目结构
 
@@ -165,4 +167,4 @@ scripts/          webhook、smoke test、备份脚本
 
 ## MVP 边界
 
-当前的“日程”来自 Desk-IX 自己保存的事项与提醒；尚未读取 Google Calendar 等外部日历。个人档案、事项与提醒均以 D1 为业务事实源。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`。Desk-IX 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。
+当前的“日程”来自 Desk-IX 自己保存的事项、工作时段与提醒；尚未读取 Google Calendar 等外部日历，也尚未建立无限重复日程系列对象。单次和批量的内部安排、改期、冲突检查与复盘已经使用统一语义。个人档案与日程事实均以 D1 为业务事实源。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`。Desk-IX 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。

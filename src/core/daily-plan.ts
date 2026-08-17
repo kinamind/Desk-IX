@@ -3,9 +3,9 @@ import { getConfig, isAIEnabled } from "../config";
 import { OpenAICompatibleProvider } from "../ai/openai-compatible";
 import { DAILY_PLAN_PROMPT } from "../ai/prompts";
 import { getChannelAdapter } from "../channels/registry";
+import { loadCalendarSnapshot } from "../db/calendar";
 import { claimDailyPlanRun, failDailyPlanRun, finishDailyPlanRun } from "../db/daily-plan-runs";
 import { searchItems, searchOwnedItems } from "../db/items";
-import { listScheduleWindows } from "../db/schedule";
 import { ensureUserProfile, getUserProfile, listEnabledDailyPlanProfiles } from "../db/user-profiles";
 import { log } from "../observability/log";
 import { summarizeItemEnrichment } from "./enrichment-summary";
@@ -36,9 +36,16 @@ export async function buildDailyPlan(
   const items = target
     ? await searchOwnedItems(env.DB, target.channel, target.userId, filters)
     : await searchItems(env.DB, filters);
-  const schedule = target
-    ? await listScheduleWindows(env.DB, target.channel, target.userId, now, 2)
-    : [];
+  const today = localDayBounds(now, timezone);
+  const calendar = target
+    ? await loadCalendarSnapshot(
+      env.DB,
+      target.channel,
+      target.userId,
+      today.start,
+      localDayBounds(now, timezone, 1).end,
+    )
+    : null;
   const fallback = deterministicPlan(items, now, timezone, profile?.userCallName ?? null);
   if (items.length === 0) return fallback;
   if (!isAIEnabled(env)) return annotateFallback(fallback);
@@ -56,12 +63,7 @@ export async function buildDailyPlan(
             currentLocalTime: localTime(now, timezone),
             timezone,
             profile: profile ? dailyPlanProfileContext(profile) : null,
-            schedule: schedule.map((window) => ({
-              title: window.title,
-              start_at: window.startAt,
-              end_at: window.endAt,
-              source: window.source,
-            })),
+            calendar,
             items: items.map((item) => {
               const enrichment = summarizeItemEnrichment(item.aiEnrichment);
               return {
@@ -154,7 +156,7 @@ export async function runDailyPlan(env: Env, now = new Date(), fetcher: typeof f
 
 function deterministicPlan(items: Item[], now: Date, timezone: string, userCallName: string | null): string {
   const today = localDayBounds(now, timezone);
-  const weekEnd = new Date(new Date(today.end).getTime() + 6 * 86_400_000).toISOString();
+  const weekEnd = localDayBounds(now, timezone, 7).start;
   const must: Item[] = [];
   const should: Item[] = [];
   const ifTime: Item[] = [];
