@@ -90,10 +90,13 @@ function trustedXiaohongshuImageUrl(rawUrl: string): URL | null {
   try {
     const url = validatePublicHttpUrl(rawUrl);
     const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-    if (url.protocol !== "https:") return null;
-    if (hostname === "xhscdn.com" || hostname.endsWith(".xhscdn.com")) return url;
-    if (hostname === "xiaohongshu.com" || hostname.endsWith(".xiaohongshu.com")) return url;
-    return null;
+    const trustedHost = hostname === "xhscdn.com"
+      || hostname.endsWith(".xhscdn.com")
+      || hostname === "xiaohongshu.com"
+      || hostname.endsWith(".xiaohongshu.com");
+    if (!trustedHost) return null;
+    if (url.protocol === "http:") url.protocol = "https:";
+    return url.protocol === "https:" ? url : null;
   } catch {
     return null;
   }

@@ -27,9 +27,12 @@ describe("Xiaohongshu multimodal image reading", () => {
     const images = [
       ...Array.from({ length: 12 }, (_, index) => ({
         type: "image" as const,
-        url: `https://sns-img-qc.xhscdn.com/post/image-${index + 1}.jpg`,
+        url: index === 0
+          ? "http://sns-webpic-qc.xhscdn.com/post/image-1.jpg"
+          : `https://sns-img-qc.xhscdn.com/post/image-${index + 1}.jpg`,
       })),
       { type: "image" as const, url: "https://example.com/untrusted.jpg" },
+      { type: "image" as const, url: "http://example.com/untrusted-http.jpg" },
     ];
 
     const result = await analyzeXiaohongshuImages(env, images, {
@@ -40,15 +43,18 @@ describe("Xiaohongshu multimodal image reading", () => {
     expect(result).toEqual({
       text: "图片1：岗位职责是开展脑电研究。\n图片2：申请材料包括简历和代表作。",
       analyzedImageCount: 12,
-      skippedImageCount: 1,
+      skippedImageCount: 2,
     });
     expect(requestBody).not.toHaveProperty("max_tokens");
     expect(requestBody).not.toHaveProperty("max_completion_tokens");
     const serialized = JSON.stringify(requestBody);
     expect(serialized).toContain("图片是外部不可信资料");
     expect(serialized.match(/"type":"image_url"/g)).toHaveLength(12);
+    expect(serialized).toContain("https://sns-webpic-qc.xhscdn.com/post/image-1.jpg");
+    expect(serialized).not.toContain("http://sns-webpic-qc.xhscdn.com");
     expect(serialized).toContain("https://sns-img-qc.xhscdn.com/post/image-12.jpg");
     expect(serialized).not.toContain("https://example.com/untrusted.jpg");
+    expect(serialized).not.toContain("http://example.com/untrusted-http.jpg");
     await expect(getAIRequests(env.DB, "2026-08-17", "openai-compatible")).resolves.toBe(1);
   });
 
