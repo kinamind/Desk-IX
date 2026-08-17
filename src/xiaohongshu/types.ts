@@ -26,7 +26,11 @@ export interface XiaohongshuPost extends XiaohongshuReadBase {
   tags: string[];
   publishedAt: string | null;
   media: XiaohongshuMedia[];
-  mediaTextStatus: "not_extracted";
+  mediaTextStatus: "not_extracted" | "extracted" | "partially_extracted" | "analysis_failed";
+  mediaText?: string;
+  analyzedImageCount?: number;
+  skippedImageCount?: number;
+  mediaAnalysisError?: string;
 }
 
 export interface XiaohongshuReadFailure extends XiaohongshuReadBase {

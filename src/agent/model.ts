@@ -10,6 +10,9 @@ export function createComposaModel(env: Env, fetcher?: typeof fetch): LanguageMo
     name: "composa-openai-compatible",
     apiKey: env.AI_API_KEY,
     includeUsage: true,
+    supportedUrls: () => ({
+      "image/*": [/^https:\/\/(?:[^/?#]+\.)?(?:xiaohongshu\.com|xhscdn\.com)(?:[/?#]|$)/],
+    }),
     ...(fetcher ? { fetch: fetcher } : {}),
     transformRequestBody: (request) => adaptChatCompletionTokenParameter(config.aiModel, request),
   });
