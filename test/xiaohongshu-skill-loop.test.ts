@@ -53,7 +53,8 @@ class XiaohongshuLoopModel implements LanguageModelV4 {
           role: "研究助理",
           applicationMaterials: ["个人简历", "研究经历说明"],
           sourceReadStatus: "full_text",
-          mediaTextStatus: "not_extracted",
+          mediaTextStatus: "extracted",
+          imageRequirements: ["个人简历", "代表作", "研究经历说明"],
         },
         provenance: { sourceUrls: [`https://www.xiaohongshu.com/explore/${noteId}`] },
       }));
@@ -61,7 +62,7 @@ class XiaohongshuLoopModel implements LanguageModelV4 {
     return Promise.resolve({
       content: [{
         type: "text",
-        text: "已读完并整理到原来的那条招聘记录里：岗位是研究助理，申请材料包括个人简历和研究经历说明；图片文字尚未提取。",
+        text: "已读完正文和配图并整理到原来的那条招聘记录里：岗位是研究助理，配图列出的申请材料包括个人简历、代表作和研究经历说明。",
       }],
       finishReason: { unified: "stop", raw: "stop" },
       usage,
@@ -131,7 +132,11 @@ describe("Xiaohongshu card-to-instruction Agent loop", () => {
       xiaohongshu_read: tool({
         description: "Read Xiaohongshu item links",
         inputSchema: z.object({ itemId: z.string().uuid() }),
-        execute: ({ itemId }) => readOwnedXiaohongshuPosts(env, principal, { itemId }, fetcher),
+        execute: ({ itemId }) => readOwnedXiaohongshuPosts(env, principal, { itemId }, fetcher, async () => ({
+          text: "图片 1：申请材料包括个人简历、代表作和研究经历说明。",
+          analyzedImageCount: 1,
+          skippedImageCount: 0,
+        })),
       }),
       item_update: tool({
         description: "Update the existing item",
@@ -177,7 +182,7 @@ describe("Xiaohongshu card-to-instruction Agent loop", () => {
       aiEnrichment: {
         role: "研究助理",
         sourceReadStatus: "full_text",
-        mediaTextStatus: "not_extracted",
+        mediaTextStatus: "extracted",
       },
     });
     const count = await env.DB.prepare(
