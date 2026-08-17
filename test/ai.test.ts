@@ -55,7 +55,7 @@ describe("OpenAI-compatible provider", () => {
     };
     const config = { ...testConfig(), aiModel: "gpt-5.6-luna" };
     const provider = new OpenAICompatibleProvider(env.DB, config, "key", fetcher, () => now);
-    await provider.generate(request);
+    await provider.generate({ ...request, maxTokens: 600 });
     expect(body).toMatchObject({ model: "gpt-5.6-luna", max_completion_tokens: 600 });
     expect(body).not.toHaveProperty("max_tokens");
     expect(body).not.toHaveProperty("temperature");
@@ -74,7 +74,7 @@ describe("OpenAI-compatible provider", () => {
     };
     const config = { ...testConfig(), aiModel: "gpt-5.6-luna" };
     const provider = new OpenAICompatibleProvider(env.DB, config, "key", fetcher, () => now);
-    await expect(provider.generate(request)).resolves.toMatchObject({ model: "gpt-5.6-luna" });
+    await expect(provider.generate({ ...request, maxTokens: 600 })).resolves.toMatchObject({ model: "gpt-5.6-luna" });
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toHaveProperty("max_tokens", 600);
     expect(bodies[1]).not.toHaveProperty("max_completion_tokens");
@@ -90,6 +90,36 @@ describe("OpenAI-compatible provider", () => {
     };
     const provider = new OpenAICompatibleProvider(env.DB, testConfig(), "key", fetcher, () => now);
     await expect(provider.generate(request)).resolves.toMatchObject({ model: "test-model" });
+  });
+
+  it("does not cap daily-plan output and gives it the longer background timeout", async () => {
+    let body: Record<string, unknown> | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body");
+      body = JSON.parse(init.body) as Record<string, unknown>;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 30);
+        init.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      });
+      return Response.json({
+        model: "gpt-5.6-luna",
+        choices: [{ message: { content: "ok" } }],
+      });
+    };
+    const config = {
+      ...testConfig(),
+      aiModel: "gpt-5.6-luna",
+      aiTimeoutMs: 10,
+      aiDailyPlanTimeoutMs: 100,
+    };
+    const provider = new OpenAICompatibleProvider(env.DB, config, "key", fetcher, () => now);
+
+    await expect(provider.generate({ ...request, purpose: "daily_plan" })).resolves.toMatchObject({ text: "ok" });
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
   });
 });
 
@@ -140,7 +170,8 @@ function agentModelEnv(): Env {
     AI_MODEL: "gpt-5.6-luna",
     AI_EMBEDDING_MODEL: "",
     AI_MAX_TOKENS: "600",
-    AI_TIMEOUT_MS: "15000",
+    AI_TIMEOUT_MS: "60000",
+    AI_DAILY_PLAN_TIMEOUT_MS: "90000",
     AI_DAILY_REQUEST_LIMIT: "100",
     AI_API_KEY: "test-key",
     URL_FETCH_TIMEOUT_MS: "6000",

@@ -36,11 +36,13 @@ export async function memorySearch(
   query: string,
   limit = 8,
 ) {
-  const items = await searchOwnedItemsNatural(env.DB, principal.channel, principal.userId, query, limit);
+  const result = await searchOwnedItemsNatural(env.DB, principal.channel, principal.userId, query, limit);
   return {
     query,
-    count: items.length,
-    items: items.map((item) => ({
+    count: result.items.length,
+    matchMode: result.matchMode,
+    requiresConversationContext: result.matchMode === "recent_fallback",
+    items: result.items.map((item) => ({
       id: item.id,
       type: item.type,
       title: item.title,
@@ -127,7 +129,7 @@ export async function loadOwnedProfile(env: Env, principal: AgentPrincipal) {
 export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet {
   return {
     memory_search: tool({
-      description: "Search this user's saved tasks, notes, resources, ideas, and projects. Use it to resolve references such as 刚才那个/招聘信息 before reading or changing anything. Returns stable item IDs.",
+      description: "Search this user's saved tasks, notes, resources, ideas, and projects. Resolve 上一条/刚才那个 from the actual conversation first, and use concrete content from a [引用消息] block as a strong anchor. matchMode=lexical is a real text match. matchMode=recent_fallback only supplies context candidates and is not sufficient evidence by itself; use conversation history to disambiguate before changing anything.",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(200),
         limit: z.number().int().min(1).max(12).default(8),

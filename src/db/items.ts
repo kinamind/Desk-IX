@@ -1,6 +1,11 @@
 import type { ChannelName, CreateItemInput, Item, ItemSearchFilters, UpdateItemInput } from "../core/types";
 import { mapItem, type ItemRow } from "./rows";
 
+export interface NaturalItemSearchResult {
+  items: Item[];
+  matchMode: "lexical" | "recent_fallback";
+}
+
 export async function createItem(db: D1Database, input: CreateItemInput, now = new Date()): Promise<Item> {
   const id = crypto.randomUUID();
   const timestamp = now.toISOString();
@@ -84,7 +89,7 @@ export async function searchOwnedItemsNatural(
   userId: string,
   query: string,
   limit = 8,
-): Promise<Item[]> {
+): Promise<NaturalItemSearchResult> {
   const candidates = await listAgentContextItems(db, channel, userId, 30);
   const normalizedQuery = normalizeSearchText(query);
   const terms = Array.from(new Set([
@@ -109,8 +114,13 @@ export async function searchOwnedItemsNatural(
   }).filter((entry) => entry.score > 0);
   scored.sort((left, right) => right.score - left.score || left.index - right.index);
   const boundedLimit = Math.min(Math.max(limit, 1), 12);
-  if (scored.length > 0) return scored.slice(0, boundedLimit).map((entry) => entry.item);
-  return candidates.slice(0, Math.min(boundedLimit, 5));
+  if (scored.length > 0) {
+    return { items: scored.slice(0, boundedLimit).map((entry) => entry.item), matchMode: "lexical" };
+  }
+  return {
+    items: candidates.slice(0, Math.min(boundedLimit, 5)),
+    matchMode: "recent_fallback",
+  };
 }
 
 function normalizeSearchText(value: string): string {

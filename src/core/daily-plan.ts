@@ -47,7 +47,6 @@ export async function buildDailyPlan(
     const provider = new OpenAICompatibleProvider(env.DB, config, env.AI_API_KEY, fetcher, () => now);
     const response = await provider.generate({
       purpose: "daily_plan",
-      maxTokens: 500,
       messages: [
         { role: "system", content: DAILY_PLAN_PROMPT },
         {
