@@ -150,7 +150,7 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
       execute: (input) => readOwnedWebPages(env, principal(), input),
     }),
     schedule_list: tool({
-      description: "List this user's busy and reminder windows before choosing a reminder time. Use it when the user asks to avoid existing plans or leaves the reminder time to your judgment.",
+      description: "List this user's busy and reminder windows, including existing reminder density. Always use it before turning broad wording such as 下午、晚上、晚点 or any Agent-selected time into a concrete timestamp. Combine the result with the profile, deadline, urgency, estimated duration, and local time; do not reuse a conventional default clock when a better free slot exists.",
       inputSchema: z.object({
         from: z.string().datetime().optional(),
         horizonDays: z.number().int().min(1).max(30).default(14),

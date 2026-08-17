@@ -18,6 +18,7 @@ import { clearPendingAction } from "../../db/pending-actions";
 import { ensureUserProfile, isValidTimezone, updateUserProfile } from "../../db/user-profiles";
 import { getConfig } from "../../config";
 import type { AgentPrincipal } from "../context";
+import type { LifecycleFollowupController } from "../followups";
 import { stableFingerprint } from "../idempotency";
 
 type PrincipalProvider = () => AgentPrincipal;
@@ -98,6 +99,7 @@ export const reminderInputSchema = z.object({
   kind: z.string().trim().min(1).max(80).default("reminder"),
   allowConflict: z.boolean().default(false),
   explicitImmediate: z.boolean().default(false),
+  timeSelection: z.enum(["agent_selected", "user_exact"]).default("agent_selected"),
 }).superRefine((input, context) => {
   if (input.operation !== "cancel" && !input.remindAt) {
     context.addIssue({
@@ -105,6 +107,20 @@ export const reminderInputSchema = z.object({
       path: ["remindAt"],
       message: "remindAt is required when setting or rescheduling a reminder",
     });
+  }
+});
+
+export const lifecycleFollowupInputSchema = z.object({
+  operation: z.enum(["set", "cancel"]),
+  itemId: z.string().uuid(),
+  reviewAt: z.string().datetime().optional(),
+  reason: z.string().trim().min(1).max(1_000).optional(),
+}).superRefine((input, context) => {
+  if (input.operation === "set" && !input.reviewAt) {
+    context.addIssue({ code: "custom", path: ["reviewAt"], message: "reviewAt is required when setting a follow-up" });
+  }
+  if (input.operation === "set" && !input.reason) {
+    context.addIssue({ code: "custom", path: ["reason"], message: "reason is required when setting a follow-up" });
   }
 });
 
@@ -178,6 +194,7 @@ export async function transitionOwnedItem(
   env: Env,
   principal: AgentPrincipal,
   input: z.infer<typeof transitionSchema>,
+  followups?: LifecycleFollowupController,
 ) {
   const current = await getOwnedItem(env.DB, input.itemId, principal.channel, principal.userId);
   if (!current) throw new Error("Item not found in the current user's memory");
@@ -185,7 +202,10 @@ export async function transitionOwnedItem(
   if (input.transition === "complete") changed = await completeItem(env.DB, current.id);
   else if (input.transition === "restore") changed = await restoreItem(env.DB, current.id);
   else changed = await archiveItem(env.DB, current.id);
-  if (input.transition !== "restore") await cancelOpenReminders(env.DB, current.id);
+  if (input.transition !== "restore") {
+    await cancelOpenReminders(env.DB, current.id);
+    await followups?.cancel(current.id);
+  }
   return {
     changed,
     itemId: current.id,
@@ -229,10 +249,13 @@ export async function manageOwnedReminder(
     new Date(window.startAt).getTime(),
     new Date(window.endAt).getTime(),
   ));
-  if (conflicts.length > 0 && !input.allowConflict) {
+  const canOverrideConflict = input.timeSelection === "user_exact" && input.allowConflict;
+  if (conflicts.length > 0 && !canOverrideConflict) {
     return {
       scheduled: false,
-      reason: "The proposed reminder overlaps an existing schedule window. Choose another time unless the user explicitly requested this exact time.",
+      reason: input.timeSelection === "agent_selected"
+        ? "The proposed broad or agent-selected reminder overlaps an existing schedule window. Inspect the schedule and choose a different useful time; broad wording never authorizes a conflict override."
+        : "The proposed reminder overlaps an existing schedule window. Choose another time unless the user explicitly requested this exact time and knowingly accepts the conflict.",
       conflicts: conflicts.slice(0, 5),
     };
   }
@@ -252,6 +275,32 @@ export async function manageOwnedReminder(
     remindAt: reminder.remindAt,
     conflictsAccepted: conflicts.length,
   };
+}
+
+export async function manageOwnedLifecycleFollowup(
+  env: Env,
+  principal: AgentPrincipal,
+  input: z.infer<typeof lifecycleFollowupInputSchema>,
+  followups: LifecycleFollowupController,
+) {
+  const item = await getOwnedItem(env.DB, input.itemId, principal.channel, principal.userId);
+  if (!item) throw new Error("Item not found in the current user's memory");
+  if (input.operation === "cancel") {
+    const result = await followups.cancel(item.id);
+    return { ...result, itemId: item.id };
+  }
+  if (!input.reviewAt || !input.reason) throw new Error("Review time and reason are required");
+  const reviewAt = new Date(input.reviewAt);
+  if (Number.isNaN(reviewAt.getTime()) || reviewAt.getTime() <= Date.now()) {
+    throw new Error("Lifecycle review time must be in the future");
+  }
+  return followups.set({
+    itemId: item.id,
+    channel: principal.channel,
+    userId: principal.userId,
+    reviewAt: reviewAt.toISOString(),
+    reason: input.reason,
+  });
 }
 
 export async function updateOwnedProfile(
@@ -283,7 +332,11 @@ export async function updateOwnedProfile(
   return { updated: true, profile };
 }
 
-export function createWriteActions(env: Env, principal: PrincipalProvider) {
+export function createWriteActions(
+  env: Env,
+  principal: PrincipalProvider,
+  followups: LifecycleFollowupController,
+) {
   return {
     item_create: action({
       description: "Create a new saved item only when the user is introducing a genuinely new task, note, resource, idea, or project. Do not use this for a reference to an existing item; search and update instead. Use distinct actionIndex values only when one message explicitly creates several items.",
@@ -304,14 +357,21 @@ export function createWriteActions(env: Env, principal: PrincipalProvider) {
       inputSchema: transitionSchema,
       permissions: ["items:write"],
       idempotencyKey: ({ input }) => `transition:${principal().eventId}:${input.itemId}:${input.transition}`,
-      execute: (input) => transitionOwnedItem(env, principal(), input),
+      execute: (input) => transitionOwnedItem(env, principal(), input, followups),
     }),
     reminder_manage: action({
-      description: "Set, reschedule, or cancel a reminder for an existing item. For a time you choose, call schedule_list first and avoid conflicts. Use a useful future time for deferred work; explicitImmediate is only for an explicit user request to remind now.",
+      description: "Set, reschedule, or cancel a reminder for an existing item. For broad wording or any time you choose, call schedule_list first, set timeSelection=agent_selected, and avoid every returned conflict; if rejected, inspect conflicts and choose another candidate. Use user_exact only when the user actually supplied a clock time, never after merely converting 下午/晚上/晚点 into a timestamp. allowConflict is valid only for an explicit exact time the user knowingly wants. Use a useful future time for deferred work; explicitImmediate is only for an explicit user request to remind now.",
       inputSchema: reminderInputSchema,
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
       execute: (input) => manageOwnedReminder(env, principal(), input),
+    }),
+    lifecycle_followup_manage: action({
+      description: "Set or cancel an Agent-owned lifecycle review for an existing time-bound item. You decide from this item's context whether a review is useful and when it should run. At review time the Agent will judge whether to complete, ask, create follow-on work, or review later; setting this never means the item will automatically complete. Use an item-specific reason, not a category rule.",
+      inputSchema: lifecycleFollowupInputSchema,
+      permissions: ["followups:write"],
+      idempotencyKey: ({ input }) => `followup:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
+      execute: (input) => manageOwnedLifecycleFollowup(env, principal(), input, followups),
     }),
     profile_update: action({
       description: "Update this user's persistent assistant relationship and planning preferences when the user states them or asks you to choose a safe, reversible default. Use for mutual forms of address, IANA timezone, daily-plan subscription/time, chronotype, explicit sleep/wake goals, routine coaching, and communication style. Never infer sensitive personal attributes.",
