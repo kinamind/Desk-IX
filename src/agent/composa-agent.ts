@@ -38,15 +38,18 @@ import {
 } from "./followups";
 import { buildProfileContext, buildSystemPrompt } from "./prompt";
 import { CALENDAR_SKILL_NAMES, calendarSkillSource } from "./skills/calendar";
+import { XIAOHONGSHU_SKILL_NAMES, xiaohongshuSkillSource } from "./skills/xiaohongshu";
 import { createCalendarTools } from "./tools/calendar";
 import { createReadTools } from "./tools/read";
 import { createWriteActions } from "./tools/write";
+import { createXiaohongshuTools } from "./tools/xiaohongshu";
 import { incomingAgentMessageSchema, type IncomingAgentMessage, type RuntimeProfile } from "./types";
 
 const ACTIVE_TOOLS = [
   "memory_search",
   "item_get",
   "web_read",
+  "xiaohongshu_read",
   "calendar_snapshot",
   "availability_find",
   "activate_skill",
@@ -94,7 +97,7 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override getSkills() {
-    return [calendarSkillSource];
+    return [calendarSkillSource, xiaohongshuSkillSource];
   }
 
   override getTools(): ToolSet {
@@ -102,6 +105,7 @@ export class ComposaAgent extends Think<Env> {
     return {
       ...createReadTools(this.env, principal),
       ...createCalendarTools(this.env, principal),
+      ...createXiaohongshuTools(this.env, principal),
     };
   }
 
@@ -365,7 +369,7 @@ export class ComposaAgent extends Think<Env> {
       sessionReady: Boolean(this.session),
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
-      skills: [...CALENDAR_SKILL_NAMES],
+      skills: [...CALENDAR_SKILL_NAMES, ...XIAOHONGSHU_SKILL_NAMES],
     };
   }
 }

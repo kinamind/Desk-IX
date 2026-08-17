@@ -43,9 +43,11 @@ describe("HTTP router", () => {
       ok: true,
       service: "Desk-IX",
       channels: { telegram: true, qq: true },
+      integrations: { xiaohongshu: { configured: true } },
       ai: { configured: false, verified: false },
     });
     expect(JSON.stringify(body)).not.toContain("test-admin-token");
+    expect(JSON.stringify(body)).not.toContain("test-session");
   });
 
   it("protects admin routes with a bearer token", async () => {

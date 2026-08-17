@@ -38,6 +38,9 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
           telegram: Boolean(env.TELEGRAM_BOT_TOKEN && config.telegramAllowedUserIds.size),
           qq: Boolean(config.qqAppId && env.QQ_APP_SECRET && config.qqAllowedUserOpenIds.size),
         },
+        integrations: {
+          xiaohongshu: { configured: Boolean(env.XHS_COOKIE?.trim()) },
+        },
         ai: { configured: aiConfigured, verified: successfulAIRequests > 0 },
       });
     }
