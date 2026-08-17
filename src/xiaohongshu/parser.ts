@@ -62,8 +62,11 @@ export function extractInitialState(html: string): unknown {
   if (html[objectStart] !== "{") throw new XiaohongshuParseError("Initial state was not an object");
   const objectText = readBalancedObject(html, objectStart);
   try {
-    return JSON.parse(replaceBareUndefined(objectText)) as unknown;
+    return parseJsonishValue(objectText);
   } catch {
+    const user = extractTopLevelObject(objectText, "user");
+    const note = extractTopLevelObject(objectText, "note");
+    if (user || note) return { user: user ?? {}, note: note ?? {} };
     throw new XiaohongshuParseError("Initial state could not be parsed");
   }
 }
@@ -93,7 +96,7 @@ function readBalancedObject(source: string, start: number): string {
   throw new XiaohongshuParseError("Initial state object was incomplete");
 }
 
-function replaceBareUndefined(source: string): string {
+function replaceBareJavaScriptValues(source: string): string {
   let result = "";
   let inString = false;
   let escaped = false;
@@ -113,15 +116,74 @@ function replaceBareUndefined(source: string): string {
       index += 1;
       continue;
     }
-    if (source.startsWith("undefined", index) && isTokenBoundary(source[index - 1]) && isTokenBoundary(source[index + 9])) {
-      result += "null";
-      index += 9;
-      continue;
+    let replaced = false;
+    for (const token of ["undefined", "-Infinity", "Infinity", "NaN"]) {
+      if (source.startsWith(token, index)
+        && isTokenBoundary(source[index - 1])
+        && isTokenBoundary(source[index + token.length])) {
+        result += "null";
+        index += token.length;
+        replaced = true;
+        break;
+      }
     }
+    if (replaced) continue;
     result += character;
     index += 1;
   }
   return result;
+}
+
+function parseJsonishValue(source: string): unknown {
+  return JSON.parse(replaceBareJavaScriptValues(source)) as unknown;
+}
+
+function extractTopLevelObject(source: string, wantedKey: string): Record<string, unknown> | null {
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '"') {
+      const end = readJsonStringEnd(source, index);
+      if (objectDepth === 1 && arrayDepth === 0) {
+        let key: unknown;
+        try {
+          key = JSON.parse(source.slice(index, end + 1)) as unknown;
+        } catch {
+          index = end;
+          continue;
+        }
+        let cursor = skipWhitespace(source, end + 1);
+        if (key === wantedKey && source[cursor] === ":") {
+          cursor = skipWhitespace(source, cursor + 1);
+          if (source[cursor] !== "{") return null;
+          try {
+            return asRecord(parseJsonishValue(readBalancedObject(source, cursor)));
+          } catch {
+            return null;
+          }
+        }
+      }
+      index = end;
+      continue;
+    }
+    if (character === "{") objectDepth += 1;
+    else if (character === "}") objectDepth -= 1;
+    else if (character === "[") arrayDepth += 1;
+    else if (character === "]") arrayDepth -= 1;
+  }
+  return null;
+}
+
+function readJsonStringEnd(source: string, start: number): number {
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === '"') return index;
+  }
+  throw new XiaohongshuParseError("Initial state contained an incomplete string");
 }
 
 function isTokenBoundary(value: string | undefined): boolean {

@@ -26,6 +26,9 @@ describe("Xiaohongshu Agent skill", () => {
     expect(loaded?.body).toContain("status=read");
     expect(loaded?.body).toContain("mediaTextStatus=not_extracted");
     expect(loaded?.body).toContain("同一条记录");
+    expect(loaded?.body).toContain("只决定不要再次 `item_create`");
+    expect(loaded?.body).toContain("就必须再次调用 `xiaohongshu_read`");
+    expect(loaded?.body).toContain("去重不能排在读取之前并终止流程");
 
     const registry = new SkillRegistry([xiaohongshuSkillSource]);
     await registry.load();

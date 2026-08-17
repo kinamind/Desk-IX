@@ -62,7 +62,7 @@ export function createXiaohongshuTools(
 ): ToolSet {
   return {
     xiaohongshu_read: tool({
-      description: "Read explicitly shared Xiaohongshu posts with the configured account session. Supply direct share URLs or an owned itemId whose saved URL/content contains them. Use this instead of ordinary web_read for Xiaohongshu. It returns full textual post facts when available and explicit login/session/media limitations without exposing credentials.",
+      description: "Read explicitly shared Xiaohongshu posts with the configured account session. Supply direct share URLs or an owned itemId whose saved URL/content contains them. Use this instead of ordinary web_read for Xiaohongshu. A matching existing item only prevents duplicate creation: call this again whenever that item is raw, partial, or its previous read failed. It returns full textual post facts when available and explicit login/session/media limitations without exposing credentials.",
       inputSchema: z.object({
         itemId: z.string().uuid().optional(),
         urls: z.array(z.string().url()).optional(),
