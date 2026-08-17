@@ -22,4 +22,5 @@ export interface RuntimeProfile {
   sessionReady: boolean;
   mcpTools: boolean;
   workspaceBash: boolean;
+  skills: string[];
 }

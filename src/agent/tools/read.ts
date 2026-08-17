@@ -1,9 +1,8 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { getConfig } from "../../config";
-import type { Item, ScheduleWindow } from "../../core/types";
+import type { Item } from "../../core/types";
 import { getOwnedItem, listOwnedItemReminders, searchOwnedItemsNatural } from "../../db/items";
-import { listScheduleWindows } from "../../db/schedule";
 import { ensureUserProfile, getUserProfile } from "../../db/user-profiles";
 import { listOwnedWorkSessions } from "../../db/work-sessions";
 import { discoverUrls, readWebPagesFromText } from "../../url/reader";
@@ -96,29 +95,6 @@ export async function readOwnedWebPages(
   };
 }
 
-export async function loadSchedule(
-  env: Env,
-  principal: AgentPrincipal,
-  input: { from?: string | undefined; horizonDays?: number | undefined },
-): Promise<{ timezone: string; windows: ScheduleWindow[] }> {
-  const config = getConfig(env);
-  const profile = await ensureUserProfile(env.DB, principal.channel, principal.userId, {
-    timezone: config.timezone,
-    locale: config.locale,
-    dailyPlanTime: config.dailyPlanTime,
-  });
-  const from = input.from ? new Date(input.from) : new Date();
-  if (Number.isNaN(from.getTime())) throw new Error("Invalid schedule start time");
-  const windows = await listScheduleWindows(
-    env.DB,
-    principal.channel,
-    principal.userId,
-    from,
-    input.horizonDays ?? 14,
-  );
-  return { timezone: profile.timezone, windows };
-}
-
 export async function loadOwnedProfile(env: Env, principal: AgentPrincipal) {
   const config = getConfig(env);
   return getUserProfile(env.DB, principal.channel, principal.userId)
@@ -151,14 +127,6 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
         urls: z.array(z.string().url()).optional(),
       }).refine((value) => Boolean(value.itemId || value.urls?.length), "Provide itemId or urls"),
       execute: (input) => readOwnedWebPages(env, principal(), input),
-    }),
-    schedule_list: tool({
-      description: "List this user's busy and reminder windows, including existing reminder density. Always use it before turning broad wording such as 下午、晚上、晚点 or any Agent-selected time into a concrete timestamp. Combine the result with the profile, deadline, urgency, estimated duration, and local time; do not reuse a conventional default clock when a better free slot exists.",
-      inputSchema: z.object({
-        from: z.string().datetime().optional(),
-        horizonDays: z.number().int().min(1).default(14),
-      }),
-      execute: (input) => loadSchedule(env, principal(), input),
     }),
     profile_get: tool({
       description: "Read this user's persistent forms of address, timezone, daily-plan subscription and time, chronotype, optional sleep goals, coaching preference, communication style, and other planning preferences.",

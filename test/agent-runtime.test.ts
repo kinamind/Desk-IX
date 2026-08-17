@@ -28,6 +28,7 @@ describe("ComposaAgent runtime", () => {
       sessionReady: true,
       mcpTools: false,
       workspaceBash: false,
+      skills: ["calendar-read", "calendar-plan", "calendar-manage", "calendar-review"],
     });
   });
 
@@ -78,13 +79,9 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("[引用消息]");
     expect(DESK_IX_PERSONA).toContain("真实会话历史");
     expect(DESK_IX_PERSONA).toContain("recent_fallback");
-    expect(DESK_IX_PERSONA).toContain("时段范围");
-    expect(DESK_IX_PERSONA).toContain("不要固定套用 14:00");
-    expect(DESK_IX_PERSONA).toContain("作息倾向");
-    expect(DESK_IX_PERSONA).toContain("提醒密度");
-    expect(DESK_IX_PERSONA).toContain("生命周期复盘");
-    expect(DESK_IX_PERSONA).toContain("发生确定性");
-    expect(DESK_IX_PERSONA).toContain("结果确定性");
+    expect(DESK_IX_PERSONA).toContain("calendar-* 技能");
+    expect(DESK_IX_PERSONA).toContain("截止时间、固定事件、提醒和实际投入工作的时段");
+    expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
   });
 });

@@ -146,6 +146,60 @@ export interface WorkSession {
   updatedAt: string;
 }
 
+export type CalendarEntryKind = "event" | "deadline" | "work_session" | "reminder";
+
+export interface CalendarEntry {
+  id: string;
+  itemId: string;
+  kind: CalendarEntryKind;
+  title: string;
+  startAt: string;
+  endAt: string | null;
+  blocksTime: boolean;
+  temporalRole: TemporalRole | null;
+  priority?: Priority | null;
+  status?: string;
+  estimatedDuration?: number | null;
+  label?: string | null;
+  rationale?: string | null;
+  reminderKind?: string | null;
+}
+
+export interface CalendarConflict {
+  leftEntryId: string;
+  rightEntryId: string;
+  leftItemId: string;
+  rightItemId: string;
+  overlapStart: string;
+  overlapEnd: string;
+}
+
+export interface CalendarSnapshot {
+  from: string;
+  to: string;
+  entries: CalendarEntry[];
+  conflicts: CalendarConflict[];
+}
+
+export interface CalendarInterval {
+  startAt: string;
+  endAt: string;
+  durationMinutes: number;
+}
+
+export interface CalendarBusyInterval extends CalendarInterval {
+  entryIds: string[];
+  itemIds: string[];
+}
+
+export interface CalendarAvailability {
+  from: string;
+  to: string;
+  minimumMinutes: number;
+  busy: CalendarBusyInterval[];
+  available: CalendarInterval[];
+}
+
 
 export interface CallbackAction {
   name: "done" | "archive" | "restore" | "later" | "reschedule" | "details";

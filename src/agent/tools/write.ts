@@ -449,14 +449,14 @@ export function createWriteActions(
       execute: (input) => transitionOwnedItem(env, principal(), input, followups),
     }),
     reminder_manage: action({
-      description: "Set, reschedule, or cancel a reminder for an existing item. For broad wording or any time you choose, call schedule_list first, set timeSelection=agent_selected, and avoid actual occupied windows; if rejected, inspect conflicts and choose another candidate. Use user_exact only when the user actually supplied a clock time, never after merely converting 下午/晚上/晚点 into a timestamp. allowConflict is valid only for an explicit exact time the user knowingly wants. You judge whether a near-term reminder is useful; code only requires it to be in the future.",
+      description: "Set, reschedule, or cancel a reminder for an existing item. For broad wording or any time you choose, call calendar_snapshot for the relevant explicit range first, set timeSelection=agent_selected, and avoid actual occupied intervals; if rejected, inspect conflicts and choose another candidate. Use user_exact only when the user actually supplied a clock time, never after merely converting 下午/晚上/晚点 into a timestamp. allowConflict is valid only for an explicit exact time the user knowingly wants. You judge whether a near-term reminder is useful; code only requires it to be in the future.",
       inputSchema: reminderInputSchema,
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
       execute: (input) => manageOwnedReminder(env, principal(), input),
     }),
     work_session_manage: action({
-      description: "Replace or cancel concrete work sessions for an existing item. The model chooses the number, duration, and timestamps from the user's actual schedule, deadline, effort, chronotype, and preferences; code does not apply a category template. Call schedule_list first. Use several non-overlapping sessions when substantial work should start before its deadline. startAfter is only an earliest-start constraint and does not reserve time. Use user_exact and allowConflict only when the user explicitly requested and accepted those exact colliding times.",
+      description: "Replace or cancel concrete work sessions for an existing item. The model chooses the number, duration, and timestamps from the user's actual calendar, deadline, effort, chronotype, and preferences; code does not apply a category template. Call calendar_snapshot and, when looking for a duration, availability_find for an explicit relevant range first. Split substantial work when the evidence supports it, without imposing a fixed session count. startAfter is only an earliest-start constraint and does not reserve time. Use user_exact and allowConflict only when the user explicitly requested and accepted those exact colliding times.",
       inputSchema: workSessionInputSchema,
       permissions: ["schedule:write"],
       idempotencyKey: ({ input }) => `work-sessions:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,

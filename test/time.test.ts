@@ -18,4 +18,16 @@ describe("timezone arithmetic", () => {
       end: "2026-08-23T16:00:00.000Z",
     });
   });
+
+  it("keeps local-day boundaries correct across daylight-saving changes", () => {
+    const beforeFallBack = new Date("2026-11-01T12:00:00.000Z");
+    expect(localDayBounds(beforeFallBack, "America/New_York")).toEqual({
+      start: "2026-11-01T04:00:00.000Z",
+      end: "2026-11-02T05:00:00.000Z",
+    });
+    expect(localDayBounds(beforeFallBack, "America/New_York", 1)).toEqual({
+      start: "2026-11-02T05:00:00.000Z",
+      end: "2026-11-03T05:00:00.000Z",
+    });
+  });
 });
