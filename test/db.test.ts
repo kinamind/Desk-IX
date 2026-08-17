@@ -5,6 +5,7 @@ import { claimMessage, failMessage } from "../src/db/messages";
 import { createReminder, markReminderFailed } from "../src/db/reminders";
 import { listScheduleWindows } from "../src/db/schedule";
 import type { IncomingMessage } from "../src/core/types";
+import { replaceWorkSessions } from "../src/db/work-sessions";
 
 const now = new Date("2026-08-15T02:00:00.000Z");
 
@@ -174,13 +175,25 @@ describe("D1 repositories", () => {
       dueAt: "2026-08-15T01:30:00.000Z",
       estimatedDuration: 60,
     }, now);
+    await replaceWorkSessions(env.DB, task.id, [{
+      startAt: "2026-08-15T08:00:00.000Z",
+      endAt: "2026-08-15T09:30:00.000Z",
+      label: "准备申请材料",
+    }], "避开下午会议", now);
 
     const windows = await listScheduleWindows(env.DB, "qq", "me", now);
     expect(windows).toEqual(expect.arrayContaining([
       {
+        itemId: task.id,
+        title: "准备申请材料",
+        startAt: "2026-08-15T08:00:00.000Z",
+        endAt: "2026-08-15T09:30:00.000Z",
+        source: "work_session",
+      },
+      {
         itemId: meeting.id,
         title: "下午会议",
-        startAt: "2026-08-15T06:15:00.000Z",
+        startAt: "2026-08-15T06:30:00.000Z",
         endAt: "2026-08-15T07:30:00.000Z",
         source: "item",
       },
@@ -188,18 +201,37 @@ describe("D1 repositories", () => {
         itemId: task.id,
         title: "提交申请（提醒）",
         startAt: "2026-08-15T05:00:00.000Z",
-        endAt: "2026-08-15T05:15:00.000Z",
+        endAt: "2026-08-15T05:01:00.000Z",
         source: "reminder",
       },
       {
         itemId: ongoing.id,
         title: "正在进行的讨论",
-        startAt: "2026-08-15T01:15:00.000Z",
+        startAt: "2026-08-15T01:30:00.000Z",
         endAt: "2026-08-15T02:30:00.000Z",
         source: "item",
       },
     ]));
     expect(windows.some((window) => window.title === "别人的会议")).toBe(false);
+  });
+
+  it("keeps deadlines visible on items without pretending they occupy the calendar", async () => {
+    const deadline = await createItem(env.DB, {
+      type: "task",
+      title: "提交 proposal",
+      content: "20号之前完成",
+      rawMessage: "20号之前完成",
+      dueAt: "2026-08-20T12:00:00.000Z",
+      estimatedDuration: 300,
+      temporalRole: "deadline",
+      sourceChannel: "qq",
+      sourceUserId: "deadline-owner",
+      sourceMessageId: "deadline-not-busy",
+    }, now);
+
+    await expect(getItem(env.DB, deadline.id)).resolves.toMatchObject({ temporalRole: "deadline" });
+    const windows = await listScheduleWindows(env.DB, "qq", "deadline-owner", now, 7);
+    expect(windows.some((window) => window.itemId === deadline.id)).toBe(false);
   });
 
   it("finds records by structured enrichment fields", async () => {

@@ -13,9 +13,9 @@ export async function createItem(db: D1Database, input: CreateItemInput, now = n
     INSERT INTO items (
       id, type, title, content, raw_message, url, tags, status, priority,
       estimated_duration, created_at, updated_at, due_at, start_after,
-      original_time_expression, source_channel, source_user_id, source_message_id,
+      original_time_expression, temporal_role, source_channel, source_user_id, source_message_id,
       source_action_index, ai_enrichment, metadata, parent_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     id,
     input.type,
@@ -32,6 +32,7 @@ export async function createItem(db: D1Database, input: CreateItemInput, now = n
     input.dueAt ?? null,
     input.startAfter ?? null,
     input.originalTimeExpression ?? null,
+    input.temporalRole ?? "legacy",
     input.sourceChannel,
     input.sourceUserId,
     input.sourceMessageId,
@@ -71,7 +72,7 @@ export async function listAgentContextItems(
   userId: string,
   limit = 20,
 ): Promise<Item[]> {
-  const boundedLimit = Math.min(Math.max(limit, 1), 30);
+  const resultLimit = Math.max(Math.floor(limit), 1);
   const result = await db.prepare(`
     SELECT * FROM items
     WHERE source_channel = ? AND source_user_id = ?
@@ -79,7 +80,7 @@ export async function listAgentContextItems(
       updated_at DESC,
       CASE status WHEN 'open' THEN 0 WHEN 'active' THEN 1 WHEN 'raw' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END
     LIMIT ?
-  `).bind(channel, userId, boundedLimit).all<ItemRow>();
+  `).bind(channel, userId, resultLimit).all<ItemRow>();
   return result.results.map(mapItem);
 }
 
@@ -90,41 +91,48 @@ export async function searchOwnedItemsNatural(
   query: string,
   limit = 8,
 ): Promise<NaturalItemSearchResult> {
-  const candidates = await listAgentContextItems(db, channel, userId, 30);
   const normalizedQuery = normalizeSearchText(query);
   const terms = Array.from(new Set([
     ...query.split(/[\s,，。；;、/]+/u),
     normalizedQuery,
   ].map(normalizeSearchText).filter((term) => term.length >= 2)));
-  const scored = candidates.map((item, index) => {
-    const title = normalizeSearchText(item.title);
-    const body = normalizeSearchText([
-      item.content,
-      item.rawMessage,
-      item.tags.join(" "),
-      JSON.stringify(item.aiEnrichment),
-    ].join(" "));
-    let score = 0;
+  const resultLimit = Math.max(Math.floor(limit), 1);
+  if (terms.length > 0) {
+    const scoreParts: string[] = [];
+    const scoreValues: string[] = [];
     for (const term of terms) {
-      if (title.includes(term)) score += 12;
-      if (body.includes(term)) score += 5;
+      scoreParts.push(`
+        CASE WHEN instr(lower(title), lower(?)) > 0 THEN 12 ELSE 0 END
+        + CASE WHEN instr(lower(content), lower(?)) > 0 THEN 5 ELSE 0 END
+        + CASE WHEN instr(lower(raw_message), lower(?)) > 0 THEN 5 ELSE 0 END
+        + CASE WHEN instr(lower(tags), lower(?)) > 0 THEN 5 ELSE 0 END
+        + CASE WHEN instr(lower(ai_enrichment), lower(?)) > 0 THEN 5 ELSE 0 END
+      `);
+      scoreValues.push(term, term, term, term, term);
     }
-    if (normalizedQuery && title.includes(normalizedQuery)) score += 20;
-    return { item, score, index };
-  }).filter((entry) => entry.score > 0);
-  scored.sort((left, right) => right.score - left.score || left.index - right.index);
-  const boundedLimit = Math.min(Math.max(limit, 1), 12);
-  if (scored.length > 0) {
-    return { items: scored.slice(0, boundedLimit).map((entry) => entry.item), matchMode: "lexical" };
+    const lexical = await db.prepare(`
+      SELECT * FROM (
+        SELECT items.*, (${scoreParts.join(" + ")}) AS match_score
+        FROM items
+        WHERE source_channel = ? AND source_user_id = ?
+      )
+      WHERE match_score > 0
+      ORDER BY match_score DESC, updated_at DESC
+      LIMIT ?
+    `).bind(...scoreValues, channel, userId, resultLimit).all<ItemRow & { match_score: number }>();
+    if (lexical.results.length > 0) {
+      return { items: lexical.results.map(mapItem), matchMode: "lexical" };
+    }
   }
+  const candidates = await listAgentContextItems(db, channel, userId, resultLimit);
   return {
-    items: candidates.slice(0, Math.min(boundedLimit, 5)),
+    items: candidates,
     matchMode: "recent_fallback",
   };
 }
 
 function normalizeSearchText(value: string): string {
-  return value.toLocaleLowerCase().replace(/[\p{P}\p{S}\p{Z}\p{Cc}]+/gu, "").slice(0, 2_000);
+  return value.toLocaleLowerCase().replace(/[\p{P}\p{S}\p{Z}\p{Cc}]+/gu, "");
 }
 
 export async function listOwnedItemReminders(
@@ -197,6 +205,7 @@ export async function updateItem(db: D1Database, id: string, input: UpdateItemIn
   if (input.dueAt !== undefined) add("due_at", input.dueAt);
   if (input.startAfter !== undefined) add("start_after", input.startAfter);
   if (input.originalTimeExpression !== undefined) add("original_time_expression", input.originalTimeExpression);
+  if (input.temporalRole !== undefined) add("temporal_role", input.temporalRole);
   if (assignments.length === 0) return false;
   add("updated_at", now.toISOString());
   values.push(id);
@@ -299,12 +308,12 @@ async function searchItemsWithScope(
   }
   if (filters.keyword) {
     clauses.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0 OR instr(lower(raw_message), lower(?)) > 0 OR instr(lower(tags), lower(?)) > 0 OR instr(lower(ai_enrichment), lower(?)) > 0)");
-    const boundedKeyword = filters.keyword.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+    const boundedKeyword = filters.keyword.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
     values.push(boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword, boundedKeyword);
   }
 
-  const limit = Math.min(Math.max(filters.limit ?? 10, 1), 50);
-  values.push(limit);
+  const limit = filters.limit === null ? null : Math.max(Math.floor(filters.limit ?? 10), 1);
+  if (limit !== null) values.push(limit);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const result = await db.prepare(`
     SELECT * FROM items ${where}
@@ -313,7 +322,7 @@ async function searchItemsWithScope(
       CASE WHEN due_at IS NULL THEN 1 ELSE 0 END,
       due_at ASC,
       created_at DESC
-    LIMIT ?
+    ${limit === null ? "" : "LIMIT ?"}
   `).bind(...values).all<ItemRow>();
   return result.results.map(mapItem);
 }

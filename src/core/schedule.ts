@@ -1,9 +1,5 @@
 import type { ScheduleWindow } from "./types";
 
-const SLOT_MS = 15 * 60_000;
-const RECOVERY_BUFFER_MS = 15 * 60_000;
-const MAX_CONFLICT_PASSES = 100;
-
 interface AvailabilityOptions {
   now: Date;
   dueAt: string | null;
@@ -16,10 +12,6 @@ export interface ReminderAvailability {
   reminderAt: string | null;
   adjusted: boolean;
   conflicts: string[];
-}
-
-function roundUpToSlot(timestamp: number): number {
-  return Math.ceil(timestamp / SLOT_MS) * SLOT_MS;
 }
 
 function validWindow(window: ScheduleWindow): boolean {
@@ -43,33 +35,20 @@ export function findAvailableReminderTime(
   const conflictTitles: string[] = [];
   let candidate = Math.max(proposed, options.now.getTime());
 
-  for (let pass = 0; pass < MAX_CONFLICT_PASSES; pass += 1) {
-    const candidateEnd = candidate + SLOT_MS;
-    const conflicts = windows.filter((window) => {
-      const start = new Date(window.startAt).getTime();
-      const end = new Date(window.endAt).getTime();
-      return candidate < end && candidateEnd > start;
-    });
-    if (conflicts.length === 0) {
-      if (dueTime !== null && candidate > dueTime) {
-        return { reminderAt: null, adjusted: candidate !== proposed, conflicts: conflictTitles };
-      }
-      return {
-        reminderAt: new Date(candidate).toISOString(),
-        adjusted: candidate !== proposed,
-        conflicts: conflictTitles,
-      };
-    }
-
-    for (const conflict of conflicts) {
-      if (!conflictTitles.includes(conflict.title)) conflictTitles.push(conflict.title);
-    }
-    const latestEnd = Math.max(...conflicts.map((window) => new Date(window.endAt).getTime()));
-    candidate = roundUpToSlot(latestEnd + RECOVERY_BUFFER_MS);
-    if (dueTime !== null && candidate > dueTime) {
-      return { reminderAt: null, adjusted: true, conflicts: conflictTitles };
+  for (const window of windows) {
+    const start = new Date(window.startAt).getTime();
+    const end = new Date(window.endAt).getTime();
+    if (candidate >= start && candidate < end) {
+      if (!conflictTitles.includes(window.title)) conflictTitles.push(window.title);
+      candidate = end;
     }
   }
-
-  return { reminderAt: null, adjusted: true, conflicts: conflictTitles };
+  if (dueTime !== null && candidate > dueTime) {
+    return { reminderAt: null, adjusted: candidate !== proposed, conflicts: conflictTitles };
+  }
+  return {
+    reminderAt: new Date(candidate).toISOString(),
+    adjusted: candidate !== proposed,
+    conflicts: conflictTitles,
+  };
 }

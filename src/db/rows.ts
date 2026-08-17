@@ -1,4 +1,4 @@
-import type { ChannelName, Item, ItemType, Priority, Reminder } from "../core/types";
+import type { ChannelName, Item, ItemType, Priority, Reminder, TemporalRole } from "../core/types";
 
 export interface ItemRow {
   id: string;
@@ -17,6 +17,7 @@ export interface ItemRow {
   due_at: string | null;
   start_after: string | null;
   original_time_expression: string | null;
+  temporal_role: TemporalRole;
   source_channel: ChannelName;
   source_user_id: string;
   source_message_id: string;
@@ -76,6 +77,7 @@ export function mapItem(row: ItemRow): Item {
     dueAt: row.due_at,
     startAfter: row.start_after,
     originalTimeExpression: row.original_time_expression,
+    temporalRole: row.temporal_role,
     sourceChannel: row.source_channel,
     sourceUserId: row.source_user_id,
     sourceMessageId: row.source_message_id,

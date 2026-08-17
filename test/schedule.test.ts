@@ -21,7 +21,7 @@ describe("conflict-aware reminder scheduling", () => {
       schedule,
       avoidWindows: [],
     })).toEqual({
-      reminderAt: "2026-08-16T07:45:00.000Z",
+      reminderAt: "2026-08-16T07:30:00.000Z",
       adjusted: true,
       conflicts: ["两点半有事"],
     });

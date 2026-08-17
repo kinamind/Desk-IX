@@ -16,6 +16,7 @@ import { cancelOpenReminders } from "../../db/reminders";
 import { listScheduleWindows } from "../../db/schedule";
 import { clearPendingAction } from "../../db/pending-actions";
 import { ensureUserProfile, isValidTimezone, updateUserProfile } from "../../db/user-profiles";
+import { cancelOpenWorkSessions, replaceWorkSessions } from "../../db/work-sessions";
 import { getConfig } from "../../config";
 import type { AgentPrincipal } from "../context";
 import type { LifecycleFollowupController } from "../followups";
@@ -27,35 +28,37 @@ const itemTypeSchema = z.enum(ITEM_TYPES);
 const prioritySchema = z.enum(PRIORITIES);
 
 const createItemSchema = z.object({
-  actionIndex: z.number().int().min(0).max(20).default(0),
+  actionIndex: z.number().int().min(0).default(0),
   type: itemTypeSchema,
   title: z.string().trim().min(1).max(300),
-  content: z.string().trim().min(1).max(20_000),
+  content: z.string().trim().min(1).max(100_000),
   url: z.string().url().nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   status: z.enum(["open", "raw", "active"]).default("open"),
   priority: prioritySchema.default("normal"),
-  estimatedDuration: z.number().int().min(1).max(10_080).nullable().optional(),
+  estimatedDuration: z.number().int().min(1).nullable().optional(),
   dueAt: z.string().datetime().nullable().optional(),
   startAfter: z.string().datetime().nullable().optional(),
   originalTimeExpression: z.string().max(300).nullable().optional(),
+  temporalRole: z.enum(["none", "deadline", "event"]),
   structuredData: z.record(z.string(), z.unknown()).optional(),
 });
 
-const updateItemSchema = z.object({
+export const updateItemSchema = z.object({
   itemId: z.string().uuid(),
   title: z.string().trim().min(1).max(300).optional(),
-  content: z.string().trim().min(1).max(20_000).optional(),
+  content: z.string().trim().min(1).max(100_000).optional(),
   tags: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
   priority: prioritySchema.optional(),
-  estimatedDuration: z.number().int().min(1).max(10_080).nullable().optional(),
+  estimatedDuration: z.number().int().min(1).nullable().optional(),
   dueAt: z.string().datetime().nullable().optional(),
   startAfter: z.string().datetime().nullable().optional(),
   originalTimeExpression: z.string().max(300).nullable().optional(),
+  temporalRole: z.enum(["none", "deadline", "event"]).optional(),
   primaryUrl: z.string().url().optional(),
   structuredData: z.record(z.string(), z.unknown()).optional(),
   provenance: z.object({
-    sourceUrls: z.array(z.string().url()).max(10).default([]),
+    sourceUrls: z.array(z.string().url()).default([]),
     note: z.string().max(1_000).optional(),
   }).optional(),
 }).refine((input) => Object.keys(input).some((key) => key !== "itemId"), "Provide at least one field to update");
@@ -98,7 +101,6 @@ export const reminderInputSchema = z.object({
   remindAt: z.string().datetime().optional(),
   kind: z.string().trim().min(1).max(80).default("reminder"),
   allowConflict: z.boolean().default(false),
-  explicitImmediate: z.boolean().default(false),
   timeSelection: z.enum(["agent_selected", "user_exact"]).default("agent_selected"),
 }).superRefine((input, context) => {
   if (input.operation !== "cancel" && !input.remindAt) {
@@ -121,6 +123,26 @@ export const lifecycleFollowupInputSchema = z.object({
   }
   if (input.operation === "set" && !input.reason) {
     context.addIssue({ code: "custom", path: ["reason"], message: "reason is required when setting a follow-up" });
+  }
+});
+
+export const workSessionInputSchema = z.object({
+  operation: z.enum(["replace", "cancel"]),
+  itemId: z.string().uuid(),
+  sessions: z.array(z.object({
+    startAt: z.string().datetime(),
+    endAt: z.string().datetime(),
+    label: z.string().trim().min(1).max(300).optional(),
+  })).optional(),
+  rationale: z.string().trim().min(1).max(1_000).optional(),
+  timeSelection: z.enum(["agent_selected", "user_exact"]).default("agent_selected"),
+  allowConflict: z.boolean().default(false),
+}).superRefine((input, context) => {
+  if (input.operation === "replace" && !input.sessions?.length) {
+    context.addIssue({ code: "custom", path: ["sessions"], message: "sessions are required when replacing a work plan" });
+  }
+  if (input.operation === "replace" && !input.rationale) {
+    context.addIssue({ code: "custom", path: ["rationale"], message: "rationale is required when replacing a work plan" });
   }
 });
 
@@ -147,6 +169,7 @@ export async function createOwnedItem(
     dueAt: input.dueAt ?? null,
     startAfter: input.startAfter ?? null,
     originalTimeExpression: input.originalTimeExpression ?? null,
+    temporalRole: input.temporalRole,
     sourceChannel: principal.channel,
     sourceUserId: principal.userId,
     sourceMessageId: principal.eventId,
@@ -173,6 +196,7 @@ export async function updateOwnedItem(
     ...(input.dueAt !== undefined ? { dueAt: input.dueAt } : {}),
     ...(input.startAfter !== undefined ? { startAfter: input.startAfter } : {}),
     ...(input.originalTimeExpression !== undefined ? { originalTimeExpression: input.originalTimeExpression } : {}),
+    ...(input.temporalRole !== undefined ? { temporalRole: input.temporalRole } : {}),
   });
   if (input.structuredData || input.provenance || input.primaryUrl) {
     await mergeItemEnrichment(
@@ -204,12 +228,85 @@ export async function transitionOwnedItem(
   else changed = await archiveItem(env.DB, current.id);
   if (input.transition !== "restore") {
     await cancelOpenReminders(env.DB, current.id);
+    await cancelOpenWorkSessions(env.DB, current.id);
     await followups?.cancel(current.id);
   }
   return {
     changed,
     itemId: current.id,
     status: input.transition === "complete" ? "completed" : input.transition === "restore" ? "open" : "archived",
+  };
+}
+
+export async function manageOwnedWorkSessions(
+  env: Env,
+  principal: AgentPrincipal,
+  input: z.infer<typeof workSessionInputSchema>,
+) {
+  const item = await getOwnedItem(env.DB, input.itemId, principal.channel, principal.userId);
+  if (!item) throw new Error("Item not found in the current user's memory");
+  if (input.operation === "cancel") {
+    return { canceled: await cancelOpenWorkSessions(env.DB, item.id), itemId: item.id };
+  }
+  if (!input.sessions?.length || !input.rationale) throw new Error("Work sessions and rationale are required");
+
+  const sessions = input.sessions.map((session) => ({
+    ...session,
+    startMs: new Date(session.startAt).getTime(),
+    endMs: new Date(session.endAt).getTime(),
+  })).sort((left, right) => left.startMs - right.startMs);
+  if (sessions.some((session) => !Number.isFinite(session.startMs) || !Number.isFinite(session.endMs) || session.endMs <= session.startMs)) {
+    return { scheduled: false, reason: "Every work session must have a valid end after its start." };
+  }
+  if (sessions.some((session) => session.endMs <= Date.now())) {
+    return { scheduled: false, reason: "Work sessions must end in the future." };
+  }
+  for (let index = 1; index < sessions.length; index += 1) {
+    if (sessions[index]!.startMs < sessions[index - 1]!.endMs) {
+      return { scheduled: false, reason: "The proposed work sessions overlap each other." };
+    }
+  }
+
+  const now = new Date();
+  const latestSessionEnd = Math.max(...sessions.map((session) => session.endMs));
+  const horizonDays = Math.max(1, Math.ceil((latestSessionEnd - now.getTime()) / 86_400_000) + 1);
+  const windows = await listScheduleWindows(env.DB, principal.channel, principal.userId, now, horizonDays);
+  const occupiedWindows = windows.filter((window) => window.itemId !== item.id && window.source !== "reminder");
+  const conflicts = sessions.flatMap((session) => occupiedWindows.filter((window) => overlaps(
+    session.startMs,
+    session.endMs,
+    new Date(window.startAt).getTime(),
+    new Date(window.endAt).getTime(),
+  )));
+  const canOverrideConflict = input.timeSelection === "user_exact" && input.allowConflict;
+  if (conflicts.length > 0 && !canOverrideConflict) {
+    return {
+      scheduled: false,
+      reason: input.timeSelection === "agent_selected"
+        ? "The Agent-selected work plan overlaps occupied time. Inspect the conflicts and choose different sessions."
+        : "The requested work plan overlaps occupied time. Only override when the user knowingly accepts that exact collision.",
+      conflicts,
+    };
+  }
+
+  const saved = await replaceWorkSessions(
+    env.DB,
+    item.id,
+    sessions.map(({ startAt, endAt, label }) => ({ startAt, endAt, ...(label ? { label } : {}) })),
+    input.rationale,
+  );
+  const totalMinutes = Math.round(sessions.reduce((total, session) => total + session.endMs - session.startMs, 0) / 60_000);
+  const dueAt = item.dueAt;
+  return {
+    scheduled: true,
+    itemId: item.id,
+    sessionCount: saved.length,
+    totalMinutes,
+    sessions: saved,
+    conflictsAccepted: conflicts.length,
+    deadlineWarnings: dueAt
+      ? saved.filter((session) => session.endAt > dueAt).map((session) => session.id)
+      : [],
   };
 }
 
@@ -233,21 +330,13 @@ export async function manageOwnedReminder(
   if (!input.remindAt) throw new Error("Reminder time is required");
   const remindAt = new Date(input.remindAt);
   if (Number.isNaN(remindAt.getTime())) throw new Error("Invalid reminder time");
-  if (!input.explicitImmediate && remindAt.getTime() < Date.now() + 15 * 60_000) {
-    return {
-      scheduled: false,
-      reason: "The proposed reminder is too immediate for a deferred action. Choose a useful later time or set explicitImmediate only when the user explicitly asked for now.",
-    };
-  }
   if (remindAt.getTime() <= Date.now()) throw new Error("Reminder time must be in the future");
 
-  const windows = await listScheduleWindows(env.DB, principal.channel, principal.userId, new Date(), 30);
-  const proposedEnd = remindAt.getTime() + 15 * 60_000;
-  const conflicts = windows.filter((window) => overlaps(
-    remindAt.getTime(),
-    proposedEnd,
-    new Date(window.startAt).getTime(),
-    new Date(window.endAt).getTime(),
+  const horizonDays = Math.max(1, Math.ceil((remindAt.getTime() - Date.now()) / 86_400_000) + 1);
+  const windows = await listScheduleWindows(env.DB, principal.channel, principal.userId, new Date(), horizonDays);
+  const conflicts = windows.filter((window) => window.itemId !== item.id && (
+    remindAt.getTime() >= new Date(window.startAt).getTime()
+    && remindAt.getTime() < new Date(window.endAt).getTime()
   ));
   const canOverrideConflict = input.timeSelection === "user_exact" && input.allowConflict;
   if (conflicts.length > 0 && !canOverrideConflict) {
@@ -256,7 +345,7 @@ export async function manageOwnedReminder(
       reason: input.timeSelection === "agent_selected"
         ? "The proposed broad or agent-selected reminder overlaps an existing schedule window. Inspect the schedule and choose a different useful time; broad wording never authorizes a conflict override."
         : "The proposed reminder overlaps an existing schedule window. Choose another time unless the user explicitly requested this exact time and knowingly accepts the conflict.",
-      conflicts: conflicts.slice(0, 5),
+      conflicts,
     };
   }
 
@@ -339,7 +428,7 @@ export function createWriteActions(
 ) {
   return {
     item_create: action({
-      description: "Create a new saved item only when the user is introducing a genuinely new task, note, resource, idea, or project. Do not use this for a reference to an existing item; search and update instead. Use distinct actionIndex values only when one message explicitly creates several items.",
+      description: "Create a new saved item only when the user is introducing a genuinely new task, note, resource, idea, or project. Do not use this for a reference to an existing item; search and update instead. Set temporalRole=deadline when dueAt is a latest-completion deadline, event when dueAt is the start of a fixed occurrence that occupies estimatedDuration, and none when dueAt has no schedule meaning. Use distinct actionIndex values only when one message explicitly creates several items.",
       inputSchema: createItemSchema,
       permissions: ["items:write"],
       idempotencyKey: ({ input }) => `create:${principal().eventId}:${input.actionIndex}`,
@@ -360,11 +449,18 @@ export function createWriteActions(
       execute: (input) => transitionOwnedItem(env, principal(), input, followups),
     }),
     reminder_manage: action({
-      description: "Set, reschedule, or cancel a reminder for an existing item. For broad wording or any time you choose, call schedule_list first, set timeSelection=agent_selected, and avoid every returned conflict; if rejected, inspect conflicts and choose another candidate. Use user_exact only when the user actually supplied a clock time, never after merely converting 下午/晚上/晚点 into a timestamp. allowConflict is valid only for an explicit exact time the user knowingly wants. Use a useful future time for deferred work; explicitImmediate is only for an explicit user request to remind now.",
+      description: "Set, reschedule, or cancel a reminder for an existing item. For broad wording or any time you choose, call schedule_list first, set timeSelection=agent_selected, and avoid actual occupied windows; if rejected, inspect conflicts and choose another candidate. Use user_exact only when the user actually supplied a clock time, never after merely converting 下午/晚上/晚点 into a timestamp. allowConflict is valid only for an explicit exact time the user knowingly wants. You judge whether a near-term reminder is useful; code only requires it to be in the future.",
       inputSchema: reminderInputSchema,
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
       execute: (input) => manageOwnedReminder(env, principal(), input),
+    }),
+    work_session_manage: action({
+      description: "Replace or cancel concrete work sessions for an existing item. The model chooses the number, duration, and timestamps from the user's actual schedule, deadline, effort, chronotype, and preferences; code does not apply a category template. Call schedule_list first. Use several non-overlapping sessions when substantial work should start before its deadline. startAfter is only an earliest-start constraint and does not reserve time. Use user_exact and allowConflict only when the user explicitly requested and accepted those exact colliding times.",
+      inputSchema: workSessionInputSchema,
+      permissions: ["schedule:write"],
+      idempotencyKey: ({ input }) => `work-sessions:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,
+      execute: (input) => manageOwnedWorkSessions(env, principal(), input),
     }),
     lifecycle_followup_manage: action({
       description: "Set or cancel an Agent-owned lifecycle review for an existing time-bound item. You decide from this item's context whether a review is useful and when it should run. At review time the Agent will judge whether to complete, ask, create follow-on work, or review later; setting this never means the item will automatically complete. Use an item-specific reason, not a category rule.",

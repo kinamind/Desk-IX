@@ -42,6 +42,22 @@ describe("OpenAI-compatible provider", () => {
     expect(calls).toBe(0);
   });
 
+  it("treats a zero daily request limit as unlimited", async () => {
+    const fetcher: typeof fetch = async () => Response.json({
+      model: "test-model",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const provider = new OpenAICompatibleProvider(
+      env.DB,
+      { ...testConfig(), aiDailyRequestLimit: 0 },
+      "key",
+      fetcher,
+      () => now,
+    );
+
+    await expect(provider.generate(request)).resolves.toMatchObject({ text: "ok" });
+  });
+
   it("uses GPT-5-compatible token parameters without forcing temperature", async () => {
     let body: Record<string, unknown> | null = null;
     const fetcher: typeof fetch = async (_input, init) => {

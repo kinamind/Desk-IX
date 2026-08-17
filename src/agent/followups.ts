@@ -43,7 +43,7 @@ export function buildLifecycleReviewMessage(
     id: item.id,
     type: item.type,
     title: item.title,
-    content: item.content.slice(0, 4_000),
+    content: item.content,
     status: item.status,
     priority: item.priority,
     estimatedDuration: item.estimatedDuration,

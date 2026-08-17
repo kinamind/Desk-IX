@@ -2,8 +2,15 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import type { AgentPrincipal } from "../src/agent/context";
 import type { ReminderWorkflowPayload } from "../src/core/types";
-import { manageOwnedReminder, transitionOwnedItem, updateOwnedItem, updateOwnedProfile } from "../src/agent/tools/write";
+import {
+  manageOwnedReminder,
+  manageOwnedWorkSessions,
+  transitionOwnedItem,
+  updateOwnedItem,
+  updateOwnedProfile,
+} from "../src/agent/tools/write";
 import { createItem, getItem } from "../src/db/items";
+import { listOwnedWorkSessions } from "../src/db/work-sessions";
 import { ensureUserProfile, getUserProfile } from "../src/db/user-profiles";
 
 const principal: AgentPrincipal = {
@@ -100,7 +107,7 @@ describe("agent write capabilities", () => {
     await expect(getItem(env.DB, item.id)).resolves.toMatchObject({ id: item.id, status: "open" });
   });
 
-  it("rejects meaningless immediate reminders and reports schedule conflicts", async () => {
+  it("lets the Agent use any future reminder time and reports actual schedule conflicts", async () => {
     const base = Date.now() + 24 * 60 * 60_000;
     const item = await createItem(env.DB, {
       type: "task",
@@ -123,17 +130,23 @@ describe("agent write capabilities", () => {
       estimatedDuration: 60,
     });
 
-    const immediate = await manageOwnedReminder(env, principal, {
+    const reminderEnv: Env = {
+      ...env,
+      REMINDER_WORKFLOW: {
+        create: async (options: WorkflowInstanceCreateOptions<ReminderWorkflowPayload> = {}) => ({
+          id: options.id ?? "generated",
+        }) as WorkflowInstance,
+      } as Workflow<ReminderWorkflowPayload>,
+    };
+    const immediate = await manageOwnedReminder(reminderEnv, principal, {
       operation: "set",
       itemId: item.id,
       remindAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       kind: "deferred_action",
       allowConflict: false,
-      explicitImmediate: false,
       timeSelection: "agent_selected",
     });
-    expect(immediate.scheduled).toBe(false);
-    expect("reason" in immediate ? immediate.reason : "").toContain("too immediate");
+    expect(immediate.scheduled).toBe(true);
 
     const conflict = await manageOwnedReminder(env, principal, {
       operation: "set",
@@ -141,7 +154,6 @@ describe("agent write capabilities", () => {
       remindAt: new Date(base).toISOString(),
       kind: "deferred_action",
       allowConflict: false,
-      explicitImmediate: false,
       timeSelection: "agent_selected",
     });
     expect(conflict.scheduled).toBe(false);
@@ -178,7 +190,6 @@ describe("agent write capabilities", () => {
       remindAt: new Date(base).toISOString(),
       kind: "deferred_action",
       allowConflict: true,
-      explicitImmediate: false,
       timeSelection: "agent_selected",
     });
     expect(broad.scheduled).toBe(false);
@@ -198,10 +209,173 @@ describe("agent write capabilities", () => {
       remindAt: new Date(base).toISOString(),
       kind: "deferred_action",
       allowConflict: true,
-      explicitImmediate: false,
       timeSelection: "user_exact",
     });
     expect(exact.scheduled).toBe(true);
     expect("conflictsAccepted" in exact ? exact.conflictsAccepted : 0).toBeGreaterThan(0);
+  });
+
+  it("does not invent a pre-meeting conflict window for a reminder", async () => {
+    const meetingAt = Date.now() + 144 * 60 * 60_000;
+    const target = await createItem(env.DB, {
+      type: "task",
+      title: "会前带材料",
+      content: "在会议前提醒",
+      rawMessage: "会前带材料",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "pre-meeting-reminder",
+    });
+    await createItem(env.DB, {
+      type: "task",
+      title: "项目会议",
+      content: "固定会议",
+      rawMessage: "项目会议",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "pre-meeting-event",
+      dueAt: new Date(meetingAt).toISOString(),
+      estimatedDuration: 60,
+    });
+    const reminderEnv: Env = {
+      ...env,
+      REMINDER_WORKFLOW: {
+        create: async (options: WorkflowInstanceCreateOptions<ReminderWorkflowPayload> = {}) => ({
+          id: options.id ?? "generated",
+        }) as WorkflowInstance,
+      } as Workflow<ReminderWorkflowPayload>,
+    };
+
+    await expect(manageOwnedReminder(reminderEnv, principal, {
+      operation: "set",
+      itemId: target.id,
+      remindAt: new Date(meetingAt - 5 * 60_000).toISOString(),
+      kind: "bring_materials",
+      allowConflict: false,
+      timeSelection: "agent_selected",
+    })).resolves.toMatchObject({ scheduled: true });
+  });
+
+  it("persists model-selected work sessions and rejects overlapping plans", async () => {
+    const base = Date.now() + 72 * 60 * 60_000;
+    const first = await createItem(env.DB, {
+      type: "task",
+      title: "整理研究内容",
+      content: "需要三小时",
+      rawMessage: "整理研究内容",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "work-session-first",
+    });
+    const second = await createItem(env.DB, {
+      type: "task",
+      title: "撰写 proposal",
+      content: "需要五小时",
+      rawMessage: "撰写 proposal",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "work-session-second",
+    });
+    const firstStart = new Date(base).toISOString();
+    const firstEnd = new Date(base + 2 * 60 * 60_000).toISOString();
+    const laterStart = new Date(base + 3 * 60 * 60_000).toISOString();
+    const laterEnd = new Date(base + 5 * 60 * 60_000).toISOString();
+
+    await expect(manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: first.id,
+      sessions: [{ startAt: firstStart, endAt: firstEnd, label: "整理现状" }],
+      rationale: "先完成较早截止的 update",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    })).resolves.toMatchObject({ scheduled: true, sessionCount: 1, totalMinutes: 120 });
+
+    const overlapping = await manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: second.id,
+      sessions: [{ startAt: firstStart, endAt: firstEnd }],
+      rationale: "proposal 第一段",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    });
+    expect(overlapping).toMatchObject({ scheduled: false });
+    expect("conflicts" in overlapping ? overlapping.conflicts[0]?.source : "").toBe("work_session");
+
+    await expect(manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: second.id,
+      sessions: [{ startAt: laterStart, endAt: laterEnd, label: "proposal 框架" }],
+      rationale: "避开已有工作段",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    })).resolves.toMatchObject({ scheduled: true, sessionCount: 1 });
+
+    await expect(listOwnedWorkSessions(env.DB, second.id, "qq", principal.userId)).resolves.toMatchObject([
+      { startAt: laterStart, endAt: laterEnd, label: "proposal 框架", status: "planned" },
+    ]);
+  });
+
+  it("rejects internally overlapping sessions and cancels sessions at terminal lifecycle", async () => {
+    const base = Date.now() + 96 * 60 * 60_000;
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "深度工作",
+      content: "分段完成",
+      rawMessage: "深度工作",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "work-session-lifecycle",
+    });
+    const start = new Date(base).toISOString();
+    const middle = new Date(base + 60 * 60_000).toISOString();
+    const end = new Date(base + 2 * 60 * 60_000).toISOString();
+
+    const overlappingPlan = await manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: item.id,
+      sessions: [
+        { startAt: start, endAt: end },
+        { startAt: middle, endAt: end },
+      ],
+      rationale: "错误重叠方案",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    });
+    expect(overlappingPlan).toMatchObject({ scheduled: false });
+    expect("reason" in overlappingPlan ? overlappingPlan.reason : "").toContain("overlap");
+
+    await manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: item.id,
+      sessions: [{ startAt: start, endAt: middle }],
+      rationale: "可执行的一段",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    });
+    await transitionOwnedItem(env, principal, { itemId: item.id, transition: "complete" });
+    await expect(listOwnedWorkSessions(env.DB, item.id, "qq", principal.userId)).resolves.toMatchObject([
+      { status: "canceled" },
+    ]);
+  });
+
+  it("does not allow work-session writes through another user's item ID", async () => {
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "别人的工作",
+      content: "私有",
+      rawMessage: "私有",
+      sourceChannel: "qq",
+      sourceUserId: "another-user",
+      sourceMessageId: "private-work-session",
+    });
+    const start = Date.now() + 120 * 60 * 60_000;
+    await expect(manageOwnedWorkSessions(env, principal, {
+      operation: "replace",
+      itemId: item.id,
+      sessions: [{ startAt: new Date(start).toISOString(), endAt: new Date(start + 60 * 60_000).toISOString() }],
+      rationale: "不应成功",
+      timeSelection: "agent_selected",
+      allowConflict: false,
+    })).rejects.toThrow("not found");
   });
 });

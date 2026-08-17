@@ -27,7 +27,9 @@ export class OpenAICompatibleProvider implements AIProvider {
     if (!this.apiKey.trim()) throw new AIUnavailableError();
     const today = localDate(this.now(), this.config.timezone);
     const used = await getAIRequests(this.db, today, "openai-compatible");
-    if (used >= this.config.aiDailyRequestLimit) throw new AIUnavailableError("Daily AI request budget exhausted");
+    if (this.config.aiDailyRequestLimit > 0 && used >= this.config.aiDailyRequestLimit) {
+      throw new AIUnavailableError("Daily AI request budget exhausted");
+    }
 
     const body: Record<string, unknown> = {
       model: this.config.aiModel,
