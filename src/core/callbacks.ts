@@ -6,6 +6,7 @@ import { setPendingAction } from "../db/pending-actions";
 import type { IncomingMessage, OutgoingMessage } from "./types";
 import { scheduleReminder } from "./reminder-service";
 import { findAvailableReminderTime } from "./schedule";
+import { cancelOpenWorkSessions } from "../db/work-sessions";
 
 export interface CallbackResult {
   output: OutgoingMessage;
@@ -22,6 +23,7 @@ export async function handleCallback(env: Env, incoming: IncomingMessage, now = 
   if (callback.name === "done") {
     const changed = await completeItem(env.DB, item.id, now);
     await cancelOpenReminders(env.DB, item.id);
+    await cancelOpenWorkSessions(env.DB, item.id, now);
     return {
       output: { text: changed ? `✓ 已完成：${item.title}` : `✓ 已是完成状态：${item.title}` },
       itemId: item.id,
@@ -32,6 +34,7 @@ export async function handleCallback(env: Env, incoming: IncomingMessage, now = 
   if (callback.name === "archive") {
     const changed = await archiveItem(env.DB, item.id, now);
     await cancelOpenReminders(env.DB, item.id);
+    await cancelOpenWorkSessions(env.DB, item.id, now);
     return {
       output: { text: changed ? `✓ 已舍弃：${item.title}` : `✓ 已是舍弃状态：${item.title}` },
       itemId: item.id,

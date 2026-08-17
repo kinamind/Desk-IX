@@ -26,7 +26,7 @@ export interface WebPageBatch {
   failures: WebPageFailure[];
 }
 
-export function discoverUrls(text: string, limit = 5): string[] {
+export function discoverUrls(text: string, limit = Number.POSITIVE_INFINITY): string[] {
   const urls: string[] = [];
   for (const match of text.matchAll(URL_PATTERN)) {
     const url = match[0].replace(/[),.;，。；\]}]+$/, "");
@@ -59,9 +59,9 @@ export async function readWebPagesFromText(
   text: string,
   config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxBytes">,
   fetcher: typeof fetch = fetch,
-  limit = 3,
+  limit = Number.POSITIVE_INFINITY,
 ): Promise<WebPageBatch> {
-  const requestedUrls = discoverUrls(text, Math.min(Math.max(limit, 1), 3));
+  const requestedUrls = discoverUrls(text, Math.max(limit, 1));
   const settled = await Promise.allSettled(requestedUrls.map((url) => readWebPage(url, config, fetcher)));
   const pages: WebPageReading[] = [];
   const failures: WebPageFailure[] = [];

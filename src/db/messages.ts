@@ -112,3 +112,14 @@ export async function failMessageBySource(
     WHERE channel = ? AND source_message_id = ?
   `).bind(now.toISOString(), error.slice(0, 1_000), channel, sourceMessageId).run();
 }
+
+export async function getMessageTextBySource(
+  db: D1Database,
+  channel: ChannelName,
+  sourceMessageId: string,
+): Promise<string | null> {
+  const row = await db.prepare(
+    "SELECT text FROM messages WHERE channel = ? AND source_message_id = ? LIMIT 1",
+  ).bind(channel, sourceMessageId).first<{ text: string }>();
+  return row?.text ?? null;
+}

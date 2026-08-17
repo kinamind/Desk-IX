@@ -140,6 +140,6 @@ describe("callback business actions", () => {
     const result = await handleCallback(callbackEnv, callbackMessage(item.id, "later", "1h"), now);
 
     expect(result.output.text).toContain("已避开日程冲突");
-    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T04:15:00.000Z");
+    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T04:00:00.000Z");
   });
 });

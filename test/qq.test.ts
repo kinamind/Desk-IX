@@ -133,6 +133,35 @@ describe("QQ adapter", () => {
     expect(parsed.message.eventId).toBe("c2c:message-reference:current-message");
   });
 
+  it("never truncates the current instruction behind a long quoted message", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret);
+    const body = JSON.stringify({
+      id: "event-long-reference",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-long-reference",
+        author: { user_openid: "qq-user-42" },
+        content: "把引用的这件事改到明晚，不是新建",
+        timestamp: "2026-08-17T02:00:00.000Z",
+        message_type: 103,
+        message_scene: { ext: ["ref_msg_idx=long-reference", "msg_idx=current-long-message"] },
+        msg_elements: [{
+          msg_idx: "long-reference",
+          message_type: 0,
+          content: `旧事项 ${"背景".repeat(20_000)}`,
+        }],
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    const parsed = await adapter.parseWebhook(qqRequest(body, signature));
+
+    expect(parsed).toMatchObject({ kind: "message" });
+    if (parsed.kind !== "message") throw new Error("Expected message");
+    expect(parsed.message.text).toContain("[引用消息]");
+    expect(parsed.message.text).toContain("[当前消息]\n把引用的这件事改到明晚，不是新建");
+  });
+
   it("rejects a tampered body", async () => {
     const adapter = new QQAdapter(testConfig(), officialSecret);
     const valid = JSON.stringify({ op: 0, t: "UNKNOWN", d: {} });

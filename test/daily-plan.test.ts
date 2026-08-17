@@ -127,4 +127,38 @@ describe("daily planning", () => {
     await failDailyPlanRun(env.DB, "2026-08-15", "telegram", "42", "temporary", now);
     await expect(claimDailyPlanRun(env.DB, "2026-08-15", "telegram", "42", now)).resolves.toBe(true);
   });
+
+  it("does not slice a complete model-generated daily plan", async () => {
+    const userId = "long-ai-plan";
+    const longItemContent = `${"背景".repeat(300)}末尾关键限制：必须避开组会。`;
+    await createItem(env.DB, {
+      type: "task",
+      title: "复杂的一天",
+      content: longItemContent,
+      rawMessage: "需要完整安排",
+      sourceChannel: "qq",
+      sourceUserId: userId,
+      sourceMessageId: "long-ai-plan-item",
+    }, now);
+    const longPlan = "安排".repeat(1_500);
+    let requestBody = "";
+    const fetcher: typeof fetch = async (_input, init) => {
+      requestBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json({
+        model: "test-model",
+        choices: [{ message: { content: longPlan } }],
+      });
+    };
+    const aiEnv = {
+      ...env,
+      AI_API_KEY: "test-key",
+      AI_MODEL: "test-model",
+      AI_DAILY_REQUEST_LIMIT: "0",
+    } as unknown as Env;
+
+    const plan = await buildDailyPlan(aiEnv, now, fetcher, { channel: "qq", userId });
+    expect(requestBody).toContain("末尾关键限制：必须避开组会");
+    expect(plan).toBe(longPlan);
+    expect(plan.length).toBe(3_000);
+  });
 });

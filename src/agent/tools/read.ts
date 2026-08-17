@@ -5,6 +5,7 @@ import type { Item, ScheduleWindow } from "../../core/types";
 import { getOwnedItem, listOwnedItemReminders, searchOwnedItemsNatural } from "../../db/items";
 import { listScheduleWindows } from "../../db/schedule";
 import { ensureUserProfile, getUserProfile } from "../../db/user-profiles";
+import { listOwnedWorkSessions } from "../../db/work-sessions";
 import { discoverUrls, readWebPagesFromText } from "../../url/reader";
 import type { AgentPrincipal } from "../context";
 
@@ -15,7 +16,7 @@ function compactItem(item: Item) {
     id: item.id,
     type: item.type,
     title: item.title,
-    content: item.content.slice(0, 8_000),
+    content: item.content,
     url: item.url,
     tags: item.tags,
     status: item.status,
@@ -23,6 +24,7 @@ function compactItem(item: Item) {
     estimatedDuration: item.estimatedDuration,
     dueAt: item.dueAt,
     startAfter: item.startAfter,
+    temporalRole: item.temporalRole,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     aiEnrichment: item.aiEnrichment,
@@ -50,8 +52,8 @@ export async function memorySearch(
       dueAt: item.dueAt,
       updatedAt: item.updatedAt,
       url: item.url,
-      snippet: item.content.slice(0, 500),
-      links: discoverUrls([item.url ?? "", item.content, item.rawMessage].join("\n"), 3),
+      snippet: item.content,
+      links: discoverUrls([item.url ?? "", item.content, item.rawMessage].join("\n")),
     })),
   };
 }
@@ -60,7 +62,8 @@ export async function loadOwnedItem(env: Env, principal: AgentPrincipal, itemId:
   const item = await getOwnedItem(env.DB, itemId, principal.channel, principal.userId);
   if (!item) throw new Error("Item not found in the current user's memory");
   const reminders = await listOwnedItemReminders(env.DB, item.id, principal.channel, principal.userId);
-  return { item: compactItem(item), reminders };
+  const workSessions = await listOwnedWorkSessions(env.DB, item.id, principal.channel, principal.userId);
+  return { item: compactItem(item), reminders, workSessions };
 }
 
 export async function readOwnedWebPages(
@@ -75,9 +78,9 @@ export async function readOwnedWebPages(
     if (!item) throw new Error("Item not found in the current user's memory");
     sourceText = [sourceText, item.url ?? "", item.content, item.rawMessage].join("\n");
   }
-  const urls = discoverUrls(sourceText, 3);
+  const urls = discoverUrls(sourceText);
   if (urls.length === 0) throw new Error("No readable public URL was found");
-  const batch = await readWebPagesFromText(urls.join("\n"), getConfig(env), fetcher, 3);
+  const batch = await readWebPagesFromText(urls.join("\n"), getConfig(env), fetcher, urls.length);
   return {
     requestedUrls: batch.requestedUrls,
     pages: batch.pages.map((page) => ({
@@ -86,8 +89,8 @@ export async function readOwnedWebPages(
       description: page.description,
       canonicalUrl: page.canonicalUrl,
       source: page.source,
-      text: page.text.slice(0, 8_000),
-      truncated: page.truncated || page.text.length > 8_000,
+      text: page.text,
+      truncated: page.truncated,
     })),
     failures: batch.failures,
   };
@@ -131,21 +134,21 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
     memory_search: tool({
       description: "Search this user's saved tasks, notes, resources, ideas, and projects. Resolve 上一条/刚才那个 from the actual conversation first, and use concrete content from a [引用消息] block as a strong anchor. matchMode=lexical is a real text match. matchMode=recent_fallback only supplies context candidates and is not sufficient evidence by itself; use conversation history to disambiguate before changing anything.",
       inputSchema: z.object({
-        query: z.string().trim().min(1).max(200),
-        limit: z.number().int().min(1).max(12).default(8),
+        query: z.string().trim().min(1).max(2_000),
+        limit: z.number().int().min(1).default(8),
       }),
       execute: ({ query, limit }) => memorySearch(env, principal(), query, limit),
     }),
     item_get: tool({
-      description: "Load one saved item and its reminders after memory_search identifies its exact ID. Access is restricted to the current user.",
+      description: "Load one saved item, its reminders, and its concrete work sessions after memory_search identifies its exact ID. Access is restricted to the current user.",
       inputSchema: z.object({ itemId: z.string().uuid() }),
       execute: ({ itemId }) => loadOwnedItem(env, principal(), itemId),
     }),
     web_read: tool({
-      description: "Read up to three ordinary public web pages. Supply explicit URLs or an owned itemId to read links stored on that item. Use this whenever the requested operation depends on what linked pages actually say.",
+      description: "Read ordinary public web pages. Supply explicit URLs or an owned itemId to read every relevant link stored on that item. Use this whenever the requested operation depends on what linked pages actually say; the fetcher retains SSRF, timeout, and per-page byte protections.",
       inputSchema: z.object({
         itemId: z.string().uuid().optional(),
-        urls: z.array(z.string().url()).max(3).optional(),
+        urls: z.array(z.string().url()).optional(),
       }).refine((value) => Boolean(value.itemId || value.urls?.length), "Provide itemId or urls"),
       execute: (input) => readOwnedWebPages(env, principal(), input),
     }),
@@ -153,7 +156,7 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
       description: "List this user's busy and reminder windows, including existing reminder density. Always use it before turning broad wording such as 下午、晚上、晚点 or any Agent-selected time into a concrete timestamp. Combine the result with the profile, deadline, urgency, estimated duration, and local time; do not reuse a conventional default clock when a better free slot exists.",
       inputSchema: z.object({
         from: z.string().datetime().optional(),
-        horizonDays: z.number().int().min(1).max(30).default(14),
+        horizonDays: z.number().int().min(1).default(14),
       }),
       execute: (input) => loadSchedule(env, principal(), input),
     }),

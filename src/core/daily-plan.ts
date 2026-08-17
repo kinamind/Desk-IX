@@ -32,7 +32,7 @@ export async function buildDailyPlan(
       }, now)
     : null;
   const timezone = profile?.timezone ?? config.timezone;
-  const filters = { statuses: ["open", "raw", "active"], limit: 50 };
+  const filters = { statuses: ["open", "raw", "active"], limit: null };
   const items = target
     ? await searchOwnedItems(env.DB, target.channel, target.userId, filters)
     : await searchItems(env.DB, filters);
@@ -56,19 +56,19 @@ export async function buildDailyPlan(
             currentLocalTime: localTime(now, timezone),
             timezone,
             profile: profile ? dailyPlanProfileContext(profile) : null,
-            schedule: schedule.slice(0, 30).map((window) => ({
+            schedule: schedule.map((window) => ({
               title: window.title,
               start_at: window.startAt,
               end_at: window.endAt,
               source: window.source,
             })),
-            items: items.slice(0, 30).map((item) => {
+            items: items.map((item) => {
               const enrichment = summarizeItemEnrichment(item.aiEnrichment);
               return {
                 id: item.id,
                 type: item.type,
                 title: item.title,
-                content: item.content.slice(0, 500),
+                content: item.content,
                 status: item.status,
                 priority: item.priority,
                 estimated_duration: item.estimatedDuration,
@@ -81,7 +81,7 @@ export async function buildDailyPlan(
         },
       ],
     });
-    return response.text.slice(0, 2200);
+    return response.text;
   } catch (error) {
     log("warn", "daily_plan_ai_fallback", { error: error instanceof Error ? error.message : String(error) });
     return annotateFallback(fallback);
@@ -173,7 +173,7 @@ function deterministicPlan(items: Item[], now: Date, timezone: string, userCallN
   appendSection(lines, "Must", must);
   appendSection(lines, "Should", should);
   appendSection(lines, "If time", ifTime);
-  return lines.slice(0, 12).join("\n");
+  return lines.join("\n");
 }
 
 function dailyPlanProfileContext(profile: UserProfile) {
@@ -197,5 +197,5 @@ function annotateFallback(plan: string): string {
 function appendSection(lines: string[], label: string, items: Item[]): void {
   if (items.length === 0) return;
   lines.push("", label);
-  for (const item of items.slice(0, 3)) lines.push(`• ${item.title}`);
+  for (const item of items) lines.push(`• ${item.title}`);
 }

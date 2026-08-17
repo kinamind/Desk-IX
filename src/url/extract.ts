@@ -53,6 +53,6 @@ export function extractPageMetadata(html: string, finalUrl: string): PageMetadat
     description,
     canonicalUrl: canonical ? new URL(canonical, finalUrl).toString() : null,
     source: new URL(finalUrl).hostname,
-    text: clean(stripped).slice(0, 20_000),
+    text: clean(stripped),
   };
 }

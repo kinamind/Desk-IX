@@ -6,6 +6,9 @@ export type Priority = (typeof PRIORITIES)[number];
 
 export type ChannelName = "telegram" | "qq";
 
+export const TEMPORAL_ROLES = ["none", "deadline", "event", "legacy"] as const;
+export type TemporalRole = (typeof TEMPORAL_ROLES)[number];
+
 export const CHRONOTYPES = ["unknown", "early", "balanced", "late"] as const;
 export type Chronotype = (typeof CHRONOTYPES)[number];
 export type UserPreferenceValue = string | number | boolean | null | string[];
@@ -67,6 +70,7 @@ export interface Item {
   dueAt: string | null;
   startAfter: string | null;
   originalTimeExpression: string | null;
+  temporalRole: TemporalRole;
   sourceChannel: ChannelName;
   sourceUserId: string;
   sourceMessageId: string;
@@ -90,6 +94,7 @@ export interface CreateItemInput {
   dueAt?: string | null;
   startAfter?: string | null;
   originalTimeExpression?: string | null;
+  temporalRole?: TemporalRole;
   sourceChannel: ChannelName;
   sourceUserId: string;
   sourceMessageId: string;
@@ -108,6 +113,7 @@ export interface UpdateItemInput {
   dueAt?: string | null;
   startAfter?: string | null;
   originalTimeExpression?: string | null;
+  temporalRole?: TemporalRole;
 }
 
 export interface ItemSearchFilters {
@@ -117,7 +123,7 @@ export interface ItemSearchFilters {
   dueTo?: string;
   createdFrom?: string;
   keyword?: string;
-  limit?: number;
+  limit?: number | null;
 }
 
 export interface ScheduleWindow {
@@ -125,7 +131,19 @@ export interface ScheduleWindow {
   title: string;
   startAt: string;
   endAt: string;
-  source: "item" | "reminder" | "message";
+  source: "item" | "reminder" | "message" | "work_session";
+}
+
+export interface WorkSession {
+  id: string;
+  itemId: string;
+  startAt: string;
+  endAt: string;
+  label: string | null;
+  rationale: string;
+  status: "planned" | "completed" | "canceled";
+  createdAt: string;
+  updatedAt: string;
 }
 
 

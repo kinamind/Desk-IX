@@ -12,7 +12,7 @@ import type { ToolSet, UIMessage } from "ai";
 import { getConfig } from "../config";
 import { getAIRequests, recordAIUsage } from "../db/ai-usage";
 import { getOwnedItem } from "../db/items";
-import { claimMessage, failMessage, failMessageBySource } from "../db/messages";
+import { claimMessage, failMessage, failMessageBySource, getMessageTextBySource } from "../db/messages";
 import { getPendingAction } from "../db/pending-actions";
 import { ensureUserProfile, getUserProfile } from "../db/user-profiles";
 import { log } from "../observability/log";
@@ -26,6 +26,7 @@ import {
   retryFailedDeliveryForEvent,
 } from "./delivery";
 import { createComposaModel } from "./model";
+import { synthesizeTurnReply } from "./finalize";
 import {
   buildLifecycleReviewMessage,
   isLifecycleFollowupSchedule,
@@ -50,6 +51,7 @@ const ACTIVE_TOOLS = [
   "item_update",
   "item_transition",
   "reminder_manage",
+  "work_session_manage",
   "lifecycle_followup_manage",
   "profile_update",
 ];
@@ -58,15 +60,15 @@ export class ComposaAgent extends Think<Env> {
   override workspaceBash = false;
   override includeMcpTools = false;
   override messageConcurrency: MessageConcurrency = "queue";
-  override maxSteps = 6;
+  override maxSteps = Number.POSITIVE_INFINITY;
   override chatRecovery = {
-    maxAttempts: 2,
-    noProgressTimeoutMs: 120_000,
-    maxRecoveryWork: 100,
-    maxOomRetries: 1,
+    maxAttempts: 10,
+    noProgressTimeoutMs: 300_000,
+    maxRecoveryWork: 1_000,
+    maxOomRetries: 3,
     terminalMessage: "这次处理被运行时中断了，我没有擅自继续操作。请重试刚才的要求。",
   };
-  override chatStreamStallTimeoutMs = 45_000;
+  override chatStreamStallTimeoutMs = 0;
   override storeMessages = false;
   override storeTools = false;
 
@@ -109,7 +111,9 @@ export class ComposaAgent extends Think<Env> {
     }, now);
     const today = localDate(now, profile.timezone);
     const used = await getAIRequests(this.env.DB, today, "openai-compatible");
-    if (used >= config.aiDailyRequestLimit) throw new Error("Daily AI request budget exhausted");
+    if (config.aiDailyRequestLimit > 0 && used >= config.aiDailyRequestLimit) {
+      throw new Error("Daily AI request budget exhausted");
+    }
     const pending = await getPendingAction(this.env.DB, principal.channel, principal.userId);
     const pendingItem = pending
       ? await getOwnedItem(this.env.DB, pending.itemId, principal.channel, principal.userId)
@@ -125,17 +129,18 @@ export class ComposaAgent extends Think<Env> {
       activeTools: ACTIVE_TOOLS,
       instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now)}${pendingContext}${lifecycleReviewContext}`,
       maxSteps: this.maxSteps,
-      maxRetries: 1,
       timeout: {
         stepMs: config.aiTimeoutMs,
-        totalMs: config.aiTimeoutMs * this.maxSteps,
-        toolMs: Math.max(config.urlFetchTimeoutMs + 2_000, 15_000),
+        toolMs: config.aiTimeoutMs,
       },
     };
   }
 
   override authorizeTurn() {
-    return { allowed: true, grantedPermissions: ["items:write", "reminders:write", "followups:write", "profile:write"] };
+    return {
+      allowed: true,
+      grantedPermissions: ["items:write", "reminders:write", "schedule:write", "followups:write", "profile:write"],
+    };
   }
 
   private lifecycleFollowupController(): LifecycleFollowupController {
@@ -296,9 +301,29 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override async onChatResponse(result: ChatResponseResult): Promise<void> {
-    const text = result.status === "completed"
+    let text = result.status === "completed"
       ? messageText(result.message)
       : "这次处理被中断了，我没有擅自继续操作。你可以直接重发刚才的要求。";
+    if (result.status === "completed" && !text) {
+      const principal = safeParseTurnPrincipal(this.activeTurnMetadata);
+      if (principal) {
+        try {
+          text = await synthesizeTurnReply(this.env, {
+            principal,
+            originalText: await getMessageTextBySource(this.env.DB, principal.channel, principal.eventId),
+            responseParts: result.message.parts,
+          });
+        } catch (error) {
+          log("error", "agent_empty_response_synthesis_failed", {
+            requestId: result.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!text) {
+        text = "刚才的工具操作已经结束，但回复收尾失败了。我保留了实际记录；你可以直接让我核对刚才的结果，不需要重复原要求。";
+      }
+    }
     await deliverTurnResponse(this.env, this.ctx.storage.sql, result.requestId, text);
     log(result.status === "error" ? "error" : "info", "agent_turn_finished", {
       requestId: result.requestId,
@@ -318,7 +343,7 @@ export class ComposaAgent extends Think<Env> {
   getRuntimeProfile(): RuntimeProfile {
     return {
       runtime: "cloudflare-think",
-      maxSteps: this.maxSteps,
+      stepLimit: Number.isFinite(this.maxSteps) ? this.maxSteps : null,
       messageConcurrency: "queue",
       recovery: true,
       recoveryPolicy: "bounded",

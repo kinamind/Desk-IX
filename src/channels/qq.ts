@@ -70,7 +70,7 @@ function referencedMessageIndex(ext: string[] | undefined): string | null {
   return entry ? entry.slice("ref_msg_idx=".length) : null;
 }
 
-function cardFieldText(fields: Record<string, unknown> | undefined, maxChars = 8_000): string {
+function cardFieldText(fields: Record<string, unknown> | undefined, maxChars = 50_000): string {
   if (!fields) return "";
   const values: string[] = [];
   let visited = 0;
@@ -141,7 +141,7 @@ function referencedMessageText(elements: unknown[] | undefined, ext: string[] | 
     : [];
   const selected = matching.length > 0 ? matching : elements;
   const unique = Array.from(new Set(selected.flatMap((value) => messageElementText(value)).filter(Boolean)));
-  return unique.join("\n").slice(0, 8_000);
+  return unique.join("\n");
 }
 
 export class QQAdapter implements ChannelAdapter {
@@ -193,11 +193,20 @@ export class QQAdapter implements ChannelAdapter {
       const referenceText = data.message_type === 103 || referencedMessageIndex(data.message_scene?.ext)
         ? referencedMessageText(data.msg_elements, data.message_scene?.ext)
         : "";
+      const maxMessageChars = 100_000;
+      const currentBlock = `[当前消息]\n${currentText}`;
+      const referenceOverhead = "[引用消息]\n\n[/引用消息]\n".length;
+      const referenceBudget = Math.max(0, maxMessageChars - currentBlock.length - referenceOverhead);
+      const boundedReference = referenceText.slice(0, referenceBudget);
       const fullText = referenceText
-        ? ["[引用消息]", referenceText, "[/引用消息]", "[当前消息]", currentText].join("\n").trim()
+        ? ["[引用消息]", boundedReference, "[/引用消息]", currentBlock].join("\n").trim()
         : currentText;
-      const text = fullText.slice(0, 20_000);
-      if (text.length < fullText.length) log("warn", "qq_message_text_truncated", { originalChars: fullText.length, keptChars: text.length });
+      const text = fullText.length > maxMessageChars
+        ? fullText.slice(fullText.length - maxMessageChars)
+        : fullText;
+      if (text.length < fullText.length || boundedReference.length < referenceText.length) {
+        log("warn", "qq_message_text_truncated", { originalChars: fullText.length, keptChars: text.length });
+      }
       if (!text) return { kind: "ignored" };
       const incoming: IncomingMessage = {
         channel: "qq",

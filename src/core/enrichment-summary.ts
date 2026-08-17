@@ -19,9 +19,9 @@ export function summarizeItemEnrichment(enrichment: Record<string, unknown>): Re
   const summary: Record<string, unknown> = {};
   for (const field of ALLOWED_FIELDS) {
     const value = enrichment[field];
-    if (typeof value === "string" && value.trim()) summary[field] = value.slice(0, 1_000);
+    if (typeof value === "string" && value.trim()) summary[field] = value;
     else if (Array.isArray(value)) {
-      const entries = value.filter((entry): entry is string => typeof entry === "string").slice(0, 12);
+      const entries = value.filter((entry): entry is string => typeof entry === "string");
       if (entries.length > 0) summary[field] = entries;
     }
   }

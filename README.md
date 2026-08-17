@@ -23,6 +23,8 @@ Desk-IX 是一个长期待在聊天工具里的轻量个人 Agent：每个用户
 - 默认把可行动消息理解为“现在暂存、稍后再做”，由模型选择真正有行动价值的未来提醒时间
 - 区分稍后行动、事件前、到期和明确的即时提醒；确认消息分别展示提醒与截止时间
 - 新建或改动提醒时读取该用户在 Desk-IX 内的事项与提醒日程，自动绕开撞期并告知实际选定时间
+- 明确区分截止日期、固定事件、提醒和实际工作时段；大块工作由模型结合真实日程与作息自主拆段，D1 保存可冲突检测的工作时段
+- Agent 工具循环不设步骤数上限；模型自然完成时结束，只有请求失效、真实运行错误或无进展恢复才中止
 - Cloudflare Workflows 一次性提醒；提醒策略由模型根据事项语义和期限决定，不按项目类型硬塞固定里程碑
 - Cron 驱动、D1 事实驱动的个性化 Daily Plan；按每位用户自己的时区和偏好时间发送，并避开已有日程
 - `完成`、`舍弃`、`稍后`、`改期`、`详情` 交互按钮；舍弃只归档，可随时恢复
@@ -42,7 +44,7 @@ flowchart LR
   QQ["QQ Bot"] --> WH
   WH --> DO["Per-user Durable Agent Session"]
   DO --> AI["Native Model / Tool Loop"]
-  AI --> TOOLS["10 Scoped Desk-IX Tools"]
+  AI --> TOOLS["12 Scoped Desk-IX Tools"]
   TOOLS --> AI
   TOOLS --> D1[("D1 Domain Memory")]
   TOOLS --> WEB["Bounded Web Reader"]
@@ -97,9 +99,9 @@ curl http://127.0.0.1:8787/health
 | `AI_MODEL` | `gpt-4.1-mini` | 支持 OpenAI tool calls 的模型名 |
 | `AI_EMBEDDING_MODEL` | 空 | 第二阶段预留，MVP 不使用 |
 | `AI_MAX_TOKENS` | `600` | 显式要求短输出时的最大 token 数；Agent 与每日安排默认不强制截断 |
-| `AI_TIMEOUT_MS` | `60000` | Agent 单步 AI 请求超时 |
-| `AI_DAILY_PLAN_TIMEOUT_MS` | `90000` | 每日安排等后台 AI 请求超时 |
-| `AI_DAILY_REQUEST_LIMIT` | `100` | 按新加坡本地日期统计的日请求上限 |
+| `AI_TIMEOUT_MS` | `180000` | 单次 AI 网络请求的失效保护；不是 Agent 步骤上限 |
+| `AI_DAILY_PLAN_TIMEOUT_MS` | `180000` | 每日安排等后台 AI 网络请求失效保护 |
+| `AI_DAILY_REQUEST_LIMIT` | `0` | 可选日请求预算；`0` 表示不限制 |
 | `URL_FETCH_TIMEOUT_MS` | `6000` | 网页获取超时 |
 | `URL_MAX_BYTES` | `524288` | 网页最大读取字节数 |
 | `TELEGRAM_ALLOWED_USER_IDS` | 空 | 逗号分隔 Telegram user ID allowlist |
