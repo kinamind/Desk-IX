@@ -10,6 +10,7 @@ interface Env {
   QQ_ALLOWED_USER_OPENIDS?: string;
   QQ_APP_SECRET: string;
   ADMIN_API_TOKEN: string;
+  XHS_COOKIE?: string;
 }
 
 declare namespace Cloudflare {
@@ -25,5 +26,6 @@ declare namespace Cloudflare {
     QQ_ALLOWED_USER_OPENIDS?: string;
     QQ_APP_SECRET: string;
     ADMIN_API_TOKEN: string;
+    XHS_COOKIE?: string;
   }
 }

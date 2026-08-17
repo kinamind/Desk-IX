@@ -33,6 +33,7 @@ Desk-IX 是一个长期待在聊天工具里的轻量个人 Agent：每个用户
 - OpenAI-compatible API，可关闭、可限额、没有未经配置的付费 fallback
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
 - 内置基础网页阅读工具：发现普通 URL 后有界抓取正文、标题和来源；登录/验证页面诚实降级
+- 按需小红书整理技能：读取用户明确分享的帖子，可使用部署端配置的账号会话；相邻卡片后的“整理这个”会继续处理原记录，不要求重发
 - QQ 分享卡片同时读取预览、隐藏字段与附件，能取得正常 URL 时继续读取原网页
 - 含链接的消息由模型按真实指令选择是否读取；无需为论文、招聘、活动等内容分别编写业务分支
 - 后续只说“根据刚才的链接更新”也能在同一轮组合 `memory_search → item_get → web_read → item_update`，并更新原记录
@@ -46,7 +47,7 @@ flowchart LR
   QQ["QQ Bot"] --> WH
   WH --> DO["Per-user Durable Agent Session"]
   DO --> AI["Native Model / Tool Loop"]
-  AI --> TOOLS["Scoped Desk-IX Tools + On-demand Calendar Skills"]
+  AI --> TOOLS["Scoped Desk-IX Tools + On-demand Skills"]
   TOOLS --> AI
   TOOLS --> D1[("D1 Domain Memory")]
   TOOLS --> WEB["Bounded Web Reader"]
@@ -86,6 +87,7 @@ curl http://127.0.0.1:8787/health
 
 - [Telegram 接入](docs/telegram.md)
 - [QQ Bot 接入](docs/qq.md)
+- [小红书读取与账号会话](docs/xiaohongshu.md)
 - [数据库备份与恢复](docs/backup.md)
 
 ## 配置
@@ -106,6 +108,7 @@ curl http://127.0.0.1:8787/health
 | `AI_DAILY_REQUEST_LIMIT` | `0` | 可选日请求预算；`0` 表示不限制 |
 | `URL_FETCH_TIMEOUT_MS` | `6000` | 网页获取超时 |
 | `URL_MAX_BYTES` | `524288` | 网页最大读取字节数 |
+| `XHS_MAX_BYTES` | `2000000` | 小红书 SSR 页面最大读取字节数 |
 | `TELEGRAM_ALLOWED_USER_IDS` | 空 | 逗号分隔 Telegram user ID allowlist |
 | `QQ_ALLOWED_USER_OPENIDS` | 空 | 逗号分隔 QQ `user_openid` allowlist |
 | `QQ_APP_ID` | 空 | QQ Bot App ID |
@@ -120,6 +123,7 @@ curl http://127.0.0.1:8787/health
 | `TELEGRAM_WEBHOOK_SECRET` | Telegram webhook header 校验 |
 | `QQ_APP_SECRET` | QQ 开放平台 AppSecret；用于 Webhook 签名与获取 App Access Token |
 | `ADMIN_API_TOKEN` | `/api/*` Bearer token |
+| `XHS_COOKIE` | 可更换的小红书浏览器登录会话；只发送给小红书域名，不是账号密码 |
 
 仓库不会提交 `.dev.vars`、`.env*`、备份文件或真实 credential。
 
@@ -158,6 +162,7 @@ src/
   http/           Worker 路由与有限 body reader
   security/       token 比较与 SSRF 防护
   url/            基础网页阅读工具：URL 发现、有界获取、正文与 metadata 抽取
+  xiaohongshu/    小红书专用安全抓取、登录态页面解析与明确降级
   workflows/      durable reminder workflow
 migrations/       版本化 D1 schema
 test/             Workers runtime 自动化测试
@@ -167,4 +172,4 @@ scripts/          webhook、smoke test、备份脚本
 
 ## MVP 边界
 
-当前的“日程”来自 Desk-IX 自己保存的事项、工作时段与提醒；尚未读取 Google Calendar 等外部日历，也尚未建立无限重复日程系列对象。单次和批量的内部安排、改期、冲突检查与复盘已经使用统一语义。个人档案与日程事实均以 D1 为业务事实源。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`。Desk-IX 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。
+当前的“日程”来自 Desk-IX 自己保存的事项、工作时段与提醒；尚未读取 Google Calendar 等外部日历，也尚未建立无限重复日程系列对象。单次和批量的内部安排、改期、冲突检查与复盘已经使用统一语义。小红书集成只读取用户明确分享的帖子，不自动同步主页、推荐流或收藏夹，也不把未做的图片 OCR 冒充成已读取正文。个人档案与日程事实均以 D1 为业务事实源。Think 运行时目前仍是实验性依赖，因此被隔离在 `src/agent/`。Desk-IX 有意不提供任意 shell、浏览器控制、MCP、插件市场、多 Agent 编排、网页 UI 与复杂 RAG；这些重量不是个人助理核心闭环的前提。

@@ -25,6 +25,7 @@
     "AI_DAILY_REQUEST_LIMIT": "100",
     "URL_FETCH_TIMEOUT_MS": "1000",
     "URL_MAX_BYTES": "524288",
+    "XHS_MAX_BYTES": "2000000",
     "TELEGRAM_ALLOWED_USER_IDS": "42",
     "QQ_ALLOWED_USER_OPENIDS": "qq-user-42",
     "QQ_APP_ID": "test-app",
@@ -33,7 +34,8 @@
     "TELEGRAM_BOT_TOKEN": "test-telegram-token",
     "TELEGRAM_WEBHOOK_SECRET": "test-webhook-secret",
     "QQ_APP_SECRET": "naOC0ocQE3shWLAfffVLB1rhYPG7",
-    "ADMIN_API_TOKEN": "test-admin-token"
+    "ADMIN_API_TOKEN": "test-admin-token",
+    "XHS_COOKIE": "web_session=test-session"
   },
   "d1_databases": [
     {

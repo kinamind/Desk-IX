@@ -28,7 +28,7 @@ describe("ComposaAgent runtime", () => {
       sessionReady: true,
       mcpTools: false,
       workspaceBash: false,
-      skills: ["calendar-read", "calendar-plan", "calendar-manage", "calendar-review"],
+      skills: ["calendar-read", "calendar-plan", "calendar-manage", "calendar-review", "xiaohongshu-organize"],
     });
   });
 
@@ -79,6 +79,7 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("[引用消息]");
     expect(DESK_IX_PERSONA).toContain("真实会话历史");
     expect(DESK_IX_PERSONA).toContain("recent_fallback");
+    expect(DESK_IX_PERSONA).toContain("平台分享卡片");
     expect(DESK_IX_PERSONA).toContain("calendar-* 技能");
     expect(DESK_IX_PERSONA).toContain("截止时间、固定事件、提醒和实际投入工作的时段");
     expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");

@@ -108,6 +108,7 @@ export interface UpdateItemInput {
   title?: string;
   content?: string;
   tags?: string[];
+  status?: "open" | "raw" | "active";
   priority?: Priority;
   estimatedDuration?: number | null;
   dueAt?: string | null;

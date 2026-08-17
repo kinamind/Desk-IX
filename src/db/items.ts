@@ -200,6 +200,7 @@ export async function updateItem(db: D1Database, id: string, input: UpdateItemIn
   if (input.title !== undefined) add("title", input.title);
   if (input.content !== undefined) add("content", input.content);
   if (input.tags !== undefined) add("tags", JSON.stringify(input.tags));
+  if (input.status !== undefined) add("status", input.status);
   if (input.priority !== undefined) add("priority", input.priority);
   if (input.estimatedDuration !== undefined) add("estimated_duration", input.estimatedDuration);
   if (input.dueAt !== undefined) add("due_at", input.dueAt);
