@@ -101,6 +101,29 @@ describe("Xiaohongshu page reading", () => {
     });
   });
 
+  it("reads the user and note stores even when unrelated authenticated state is not JSON", () => {
+    const authenticatedWithRuntimeValues = pageWithState(`{
+      "global":{"runtimeCache":new Map([["account",1]])},
+      "user":{"loggedIn":true},
+      "account":{"lastSeen":NaN,"quota":Infinity},
+      "note":{"noteDetailMap":{"${noteId}":{"note":{
+        "noteId":"${noteId}",
+        "title":"登录后正文",
+        "desc":"这部分应当正常读取",
+        "user":{"nickname":"研究中心"},
+        "tagList":[],
+        "imageList":[]
+      }}}}
+    }`);
+
+    expect(parseXiaohongshuPage(authenticatedWithRuntimeValues, sourceUrl, true)).toMatchObject({
+      status: "read",
+      authenticated: true,
+      title: "登录后正文",
+      description: "这部分应当正常读取",
+    });
+  });
+
   it("sends the account cookie only to Xiaohongshu hosts and revalidates redirects", async () => {
     const calls: Array<{ url: string; headers: Headers }> = [];
     const fetcher: typeof fetch = async (input, init) => {
