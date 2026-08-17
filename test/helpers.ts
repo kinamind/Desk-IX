@@ -11,6 +11,7 @@ export function testConfig(): RuntimeConfig {
     aiEmbeddingModel: "",
     aiMaxTokens: 600,
     aiTimeoutMs: 1_000,
+    aiDailyPlanTimeoutMs: 90_000,
     aiDailyRequestLimit: 100,
     urlFetchTimeoutMs: 1_000,
     urlMaxBytes: 524_288,

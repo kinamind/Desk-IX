@@ -33,19 +33,25 @@ export class OpenAICompatibleProvider implements AIProvider {
       model: this.config.aiModel,
       messages: request.messages,
     };
-    const maxTokens = Math.min(request.maxTokens ?? this.config.aiMaxTokens, this.config.aiMaxTokens);
-    if (usesMaxCompletionTokens(this.config.aiModel)) {
+    const maxTokens = request.maxTokens == null
+      ? null
+      : Math.min(request.maxTokens, this.config.aiMaxTokens);
+    if (maxTokens != null && usesMaxCompletionTokens(this.config.aiModel)) {
       body.max_completion_tokens = maxTokens;
-    } else {
+    } else if (maxTokens != null) {
       body.temperature = request.temperature ?? 0.1;
       body.max_tokens = maxTokens;
     }
     if (request.expectJson) body.response_format = { type: "json_object" };
 
     let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const timeoutMs = request.purpose === "daily_plan"
+      ? this.config.aiDailyPlanTimeoutMs
+      : this.config.aiTimeoutMs;
+    const maxAttempts = request.purpose === "daily_plan" ? 2 : 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort("AI request timed out"), this.config.aiTimeoutMs);
+      const timeout = setTimeout(() => controller.abort("AI request timed out"), timeoutMs);
       try {
         const fetcher = this.fetcher;
         const response = await fetcher(`${this.config.aiBaseUrl}/chat/completions`, {
@@ -88,7 +94,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         const retryable = error instanceof ProviderHttpError ? error.retryable : error instanceof DOMException && error.name === "AbortError";
-        if (!retryable || attempt === 2) throw lastError;
+        if (!retryable || attempt === maxAttempts - 1) throw lastError;
       } finally {
         clearTimeout(timeout);
       }
