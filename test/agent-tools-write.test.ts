@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import type { AgentPrincipal } from "../src/agent/context";
+import type { ReminderWorkflowPayload } from "../src/core/types";
 import { manageOwnedReminder, transitionOwnedItem, updateOwnedItem, updateOwnedProfile } from "../src/agent/tools/write";
 import { createItem, getItem } from "../src/db/items";
 import { ensureUserProfile, getUserProfile } from "../src/db/user-profiles";
@@ -129,6 +130,7 @@ describe("agent write capabilities", () => {
       kind: "deferred_action",
       allowConflict: false,
       explicitImmediate: false,
+      timeSelection: "agent_selected",
     });
     expect(immediate.scheduled).toBe(false);
     expect("reason" in immediate ? immediate.reason : "").toContain("too immediate");
@@ -140,9 +142,66 @@ describe("agent write capabilities", () => {
       kind: "deferred_action",
       allowConflict: false,
       explicitImmediate: false,
+      timeSelection: "agent_selected",
     });
     expect(conflict.scheduled).toBe(false);
     expect("reason" in conflict ? conflict.reason : "").toContain("overlaps");
     expect("conflicts" in conflict ? conflict.conflicts[0]?.title : "").toBe("已有会议");
+  });
+
+  it("does not let an agent-selected broad time override a collision", async () => {
+    const base = Date.now() + 48 * 60 * 60_000;
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "下午处理材料",
+      content: "下午提醒，具体时间由 Desk-IX 选择",
+      rawMessage: "下午提醒我",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "broad-time-target",
+    });
+    await createItem(env.DB, {
+      type: "task",
+      title: "下午已有安排",
+      content: "占用这一小时",
+      rawMessage: "已有安排",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "broad-time-conflict",
+      dueAt: new Date(base).toISOString(),
+      estimatedDuration: 60,
+    });
+
+    const broad = await manageOwnedReminder(env, principal, {
+      operation: "set",
+      itemId: item.id,
+      remindAt: new Date(base).toISOString(),
+      kind: "deferred_action",
+      allowConflict: true,
+      explicitImmediate: false,
+      timeSelection: "agent_selected",
+    });
+    expect(broad.scheduled).toBe(false);
+    expect("reason" in broad ? broad.reason : "").toContain("broad or agent-selected");
+
+    const reminderEnv: Env = {
+      ...env,
+      REMINDER_WORKFLOW: {
+        create: async (options: WorkflowInstanceCreateOptions<ReminderWorkflowPayload> = {}) => ({
+          id: options.id ?? "generated",
+        }) as WorkflowInstance,
+      } as Workflow<ReminderWorkflowPayload>,
+    };
+    const exact = await manageOwnedReminder(reminderEnv, principal, {
+      operation: "set",
+      itemId: item.id,
+      remindAt: new Date(base).toISOString(),
+      kind: "deferred_action",
+      allowConflict: true,
+      explicitImmediate: false,
+      timeSelection: "user_exact",
+    });
+    expect(exact.scheduled).toBe(true);
+    expect("conflictsAccepted" in exact ? exact.conflictsAccepted : 0).toBeGreaterThan(0);
   });
 });

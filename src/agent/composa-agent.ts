@@ -7,11 +7,12 @@ import type {
   TurnConfig,
   TurnContext,
 } from "@cloudflare/think";
+import type { Schedule } from "agents";
 import type { ToolSet, UIMessage } from "ai";
 import { getConfig } from "../config";
 import { getAIRequests, recordAIUsage } from "../db/ai-usage";
 import { getOwnedItem } from "../db/items";
-import { failMessageBySource } from "../db/messages";
+import { claimMessage, failMessage, failMessageBySource } from "../db/messages";
 import { getPendingAction } from "../db/pending-actions";
 import { ensureUserProfile, getUserProfile } from "../db/user-profiles";
 import { log } from "../observability/log";
@@ -25,6 +26,15 @@ import {
   retryFailedDeliveryForEvent,
 } from "./delivery";
 import { createComposaModel } from "./model";
+import {
+  buildLifecycleReviewMessage,
+  isLifecycleFollowupSchedule,
+  LIFECYCLE_REVIEW_EVENT_PREFIX,
+  lifecycleFollowupPayloadSchema,
+  lifecycleReviewEventId,
+  type LifecycleFollowupController,
+  type LifecycleFollowupPayload,
+} from "./followups";
 import { buildProfileContext, buildSystemPrompt } from "./prompt";
 import { createReadTools } from "./tools/read";
 import { createWriteActions } from "./tools/write";
@@ -40,6 +50,7 @@ const ACTIVE_TOOLS = [
   "item_update",
   "item_transition",
   "reminder_manage",
+  "lifecycle_followup_manage",
   "profile_update",
 ];
 
@@ -80,7 +91,11 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override getActions() {
-    return createWriteActions(this.env, () => parseTurnPrincipal(this.activeTurnMetadata));
+    return createWriteActions(
+      this.env,
+      () => parseTurnPrincipal(this.activeTurnMetadata),
+      this.lifecycleFollowupController(),
+    );
   }
 
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
@@ -99,12 +114,16 @@ export class ComposaAgent extends Think<Env> {
     const pendingItem = pending
       ? await getOwnedItem(this.env.DB, pending.itemId, principal.channel, principal.userId)
       : null;
-    const pendingContext = pending && pendingItem
+    const isLifecycleReview = principal.eventId.startsWith(`${LIFECYCLE_REVIEW_EVENT_PREFIX}:`);
+    const pendingContext = !isLifecycleReview && pending && pendingItem
       ? `\n当前有一个待完成的交互：用户刚才要求为事项「${pendingItem.title}」（itemId: ${pendingItem.id}）${pending.action === "reschedule" ? "修改提醒时间" : pending.action}。把本轮自然语言优先理解为对这项交互的回答；必要时先查日程，再调用 reminder_manage。`
+      : "";
+    const lifecycleReviewContext = isLifecycleReview
+      ? "\n本轮是系统按你此前的判断唤醒的生命周期复盘，不是用户刚发来的事实陈述。先加载指定事项与必要上下文；由你判断完成、询问、创建后续或再次复盘。任何自动完成都要告知判断依据并允许用户纠正。"
       : "";
     return {
       activeTools: ACTIVE_TOOLS,
-      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now)}${pendingContext}`,
+      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now)}${pendingContext}${lifecycleReviewContext}`,
       maxSteps: this.maxSteps,
       maxRetries: 1,
       timeout: {
@@ -116,7 +135,64 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override authorizeTurn() {
-    return { allowed: true, grantedPermissions: ["items:write", "reminders:write", "profile:write"] };
+    return { allowed: true, grantedPermissions: ["items:write", "reminders:write", "followups:write", "profile:write"] };
+  }
+
+  private lifecycleFollowupController(): LifecycleFollowupController {
+    return {
+      set: async (payload) => {
+        const reviewAt = new Date(payload.reviewAt);
+        if (Number.isNaN(reviewAt.getTime()) || reviewAt.getTime() <= Date.now()) {
+          throw new Error("Lifecycle review time must be in the future");
+        }
+        await this.cancelLifecycleFollowups(payload.itemId);
+        const schedule = await this.schedule(reviewAt, "reviewScheduledItem", payload, { idempotent: true });
+        return { scheduled: true, scheduleId: schedule.id, reviewAt: payload.reviewAt };
+      },
+      cancel: async (itemId) => ({ canceled: await this.cancelLifecycleFollowups(itemId) }),
+    };
+  }
+
+  private async cancelLifecycleFollowups(itemId: string): Promise<number> {
+    const schedules = await this.listSchedules({ type: "scheduled" });
+    const matches = schedules.filter((schedule: Schedule<unknown>) => isLifecycleFollowupSchedule(schedule, itemId));
+    const results = await Promise.all(matches.map((schedule) => this.cancelSchedule(schedule.id)));
+    return results.filter(Boolean).length;
+  }
+
+  async reviewScheduledItem(rawPayload: LifecycleFollowupPayload): Promise<void> {
+    const payload = lifecycleFollowupPayloadSchema.parse(rawPayload);
+    const item = await getOwnedItem(this.env.DB, payload.itemId, payload.channel, payload.userId);
+    if (!item || item.status === "completed" || item.status === "archived") return;
+
+    const now = new Date();
+    const eventId = lifecycleReviewEventId(payload);
+    const text = buildLifecycleReviewMessage(item, payload, now);
+    const claim = await claimMessage(this.env.DB, {
+      channel: payload.channel,
+      eventId,
+      messageId: eventId,
+      userId: payload.userId,
+      text,
+      timestamp: now.toISOString(),
+      eventType: "message",
+    }, now);
+    if (!claim.claimed) return;
+
+    try {
+      await this.receive({
+        channel: payload.channel,
+        userId: payload.userId,
+        eventId,
+        text,
+        receivedAt: now.toISOString(),
+      });
+      log("info", "agent_lifecycle_review_submitted", { itemId: payload.itemId, eventId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await failMessage(this.env.DB, claim.id, `lifecycle review submission: ${message}`);
+      throw error;
+    }
   }
 
   async receive(raw: IncomingAgentMessage): Promise<{

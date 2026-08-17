@@ -4,6 +4,7 @@ import { getChannelAdapter } from "../channels/registry";
 import { processIncoming } from "../core/processor";
 import { submitAgentMessage } from "../agent/ingress";
 import { buildDailyPlan, runDailyPlan } from "../core/daily-plan";
+import { scheduleReminder } from "../core/reminder-service";
 import { localDate } from "../core/time";
 import { getAIRequests } from "../db/ai-usage";
 import { archiveItem, completeItem, getItem, restoreItem, searchItems } from "../db/items";
@@ -12,6 +13,10 @@ import { log } from "../observability/log";
 import { constantTimeEqual } from "../security/crypto";
 
 const itemTypeSchema = z.enum(["resource", "idea", "task", "note", "project"]);
+const adminReminderSchema = z.object({
+  remindAt: z.string().datetime(),
+  kind: z.string().trim().min(1).max(80).default("admin_reschedule"),
+});
 
 export async function routeRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
@@ -92,6 +97,32 @@ export async function routeRequest(request: Request, env: Env, ctx: ExecutionCon
       if (request.method === "POST" && restoreMatch?.[1]) {
         const changed = await restoreItem(env.DB, restoreMatch[1]);
         return Response.json({ ok: true, changed });
+      }
+
+      const reminderMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/reminder$/i);
+      if (reminderMatch?.[1] && request.method === "POST") {
+        const item = await getItem(env.DB, reminderMatch[1]);
+        if (!item) return Response.json({ error: "Not found" }, { status: 404 });
+        const parsed = adminReminderSchema.safeParse(await request.json());
+        if (!parsed.success) return Response.json({ error: "Invalid reminder" }, { status: 400 });
+        const remindAt = new Date(parsed.data.remindAt);
+        if (remindAt.getTime() <= Date.now()) {
+          return Response.json({ error: "Reminder must be in the future" }, { status: 400 });
+        }
+        const reminder = await scheduleReminder(env, {
+          itemId: item.id,
+          remindAt: remindAt.toISOString(),
+          kind: parsed.data.kind,
+          target: { channel: item.sourceChannel, userId: item.sourceUserId },
+        });
+        await cancelOpenReminders(env.DB, item.id, reminder.id);
+        return Response.json({ ok: true, remindAt: reminder.remindAt });
+      }
+      if (reminderMatch?.[1] && request.method === "DELETE") {
+        const item = await getItem(env.DB, reminderMatch[1]);
+        if (!item) return Response.json({ error: "Not found" }, { status: 404 });
+        await cancelOpenReminders(env.DB, item.id);
+        return Response.json({ ok: true, canceled: true });
       }
 
       if (request.method === "POST" && path === "/api/daily-plan") {

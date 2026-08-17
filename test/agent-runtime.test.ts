@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { parseTurnPrincipal, stampTurnPrincipal, type AgentPrincipal } from "../src/agent/context";
 import { DESK_IX_PERSONA } from "../src/agent/prompt";
-import { profileUpdateSchema, reminderInputSchema } from "../src/agent/tools/write";
+import {
+  lifecycleFollowupInputSchema,
+  profileUpdateSchema,
+  reminderInputSchema,
+} from "../src/agent/tools/write";
 
 describe("ComposaAgent runtime", () => {
   it("uses a bounded, queued Think runtime without broad tools", async () => {
@@ -41,7 +45,10 @@ describe("ComposaAgent runtime", () => {
   });
 
   it("exposes an OpenAI-compatible object schema for reminder management", () => {
-    expect(z.toJSONSchema(reminderInputSchema)).toMatchObject({ type: "object" });
+    const reminderSchema = z.toJSONSchema(reminderInputSchema);
+    expect(reminderSchema.type).toBe("object");
+    expect(reminderSchema.properties?.timeSelection).toMatchObject({ enum: ["agent_selected", "user_exact"] });
+    expect(z.toJSONSchema(lifecycleFollowupInputSchema)).toMatchObject({ type: "object" });
   });
 
   it("has a stable Desk-IX persona and object-shaped profile action", () => {
@@ -51,6 +58,13 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("[引用消息]");
     expect(DESK_IX_PERSONA).toContain("真实会话历史");
     expect(DESK_IX_PERSONA).toContain("recent_fallback");
+    expect(DESK_IX_PERSONA).toContain("时段范围");
+    expect(DESK_IX_PERSONA).toContain("不要固定套用 14:00");
+    expect(DESK_IX_PERSONA).toContain("作息倾向");
+    expect(DESK_IX_PERSONA).toContain("提醒密度");
+    expect(DESK_IX_PERSONA).toContain("生命周期复盘");
+    expect(DESK_IX_PERSONA).toContain("发生确定性");
+    expect(DESK_IX_PERSONA).toContain("结果确定性");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
   });
 });
