@@ -4,6 +4,7 @@ import { getConfig } from "../../config";
 import { findCalendarAvailability } from "../../core/calendar";
 import { loadCalendarSnapshot } from "../../db/calendar";
 import { ensureUserProfile } from "../../db/user-profiles";
+import { listOwnedItemParticipants } from "../../db/context-memory";
 import type { AgentPrincipal } from "../context";
 
 type PrincipalProvider = () => AgentPrincipal;
@@ -31,7 +32,20 @@ export async function calendarSnapshot(
     input.from,
     input.to,
   );
-  return { timezone: profile.timezone, ...snapshot };
+  const participants = await listOwnedItemParticipants(
+    env.DB,
+    principal.channel,
+    principal.userId,
+    snapshot.entries.map((entry) => entry.itemId),
+  );
+  return {
+    timezone: profile.timezone,
+    ...snapshot,
+    entries: snapshot.entries.map((entry) => ({
+      ...entry,
+      participants: participants.get(entry.itemId) ?? [],
+    })),
+  };
 }
 
 export async function findOwnedAvailability(

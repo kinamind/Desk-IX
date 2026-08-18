@@ -24,14 +24,16 @@ describe("URL safety and extraction", () => {
   it("extracts metadata and strips executable content", () => {
     const metadata = extractPageMetadata(`
       <html><head><title>Fallback</title><meta property="og:title" content="A &amp; B">
-      <meta name="description" content="Useful page"><link rel="canonical" href="/canonical"></head>
-      <body>Hello <script>steal()</script> world</body></html>
+      <meta name="description" content="Useful page"><meta property="og:image" content="/cover.jpg">
+      <link rel="canonical" href="/canonical"></head>
+      <body>Hello <img src="https://cdn.example/detail.png"><script>steal()</script> world</body></html>
     `, "https://example.com/path");
     expect(metadata).toMatchObject({
       title: "A & B",
       description: "Useful page",
       canonicalUrl: "https://example.com/canonical",
       source: "example.com",
+      images: ["https://example.com/cover.jpg", "https://cdn.example/detail.png"],
     });
     expect(metadata.text).toContain("Hello world");
     expect(metadata.text).not.toContain("steal");

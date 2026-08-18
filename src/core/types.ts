@@ -6,6 +6,56 @@ export type Priority = (typeof PRIORITIES)[number];
 
 export type ChannelName = "telegram" | "qq";
 
+export const ATTACHMENT_KINDS = ["image", "audio", "video", "file", "unknown"] as const;
+export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
+
+export interface IncomingAttachment {
+  kind: AttachmentKind;
+  context: "current" | "quoted";
+  url: string;
+  mediaType: string | null;
+  filename: string | null;
+}
+
+export const CONTEXT_ENTITY_KINDS = ["self", "person", "organization", "team", "place", "other"] as const;
+export type ContextEntityKind = (typeof CONTEXT_ENTITY_KINDS)[number];
+
+export interface ContextEntity {
+  id: string;
+  kind: ContextEntityKind;
+  name: string;
+  aliases: string[];
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt: string;
+}
+
+export interface ContextFact {
+  id: string;
+  subjectEntityId: string;
+  predicate: string;
+  value: string;
+  objectEntityId: string | null;
+  contextItemId: string | null;
+  confidence: number;
+  sensitivity: "ordinary" | "sensitive";
+  sourceMessageId: string;
+  validFrom: string | null;
+  validUntil: string | null;
+  status: "active" | "retracted" | "superseded";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContextParticipant {
+  entityId: string;
+  kind: ContextEntityKind;
+  name: string;
+  role: string;
+  confidence: number;
+}
+
 export const TEMPORAL_ROLES = ["none", "deadline", "event", "legacy"] as const;
 export type TemporalRole = (typeof TEMPORAL_ROLES)[number];
 
@@ -164,6 +214,7 @@ export interface CalendarEntry {
   label?: string | null;
   rationale?: string | null;
   reminderKind?: string | null;
+  participants?: ContextParticipant[];
 }
 
 export interface CalendarConflict {
@@ -219,6 +270,7 @@ export interface IncomingMessage {
   eventType: "message" | "callback";
   callback?: CallbackAction;
   replyToMessageId?: string;
+  attachments?: IncomingAttachment[];
 }
 
 export interface OutgoingButton {

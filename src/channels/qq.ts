@@ -1,7 +1,15 @@
 import nacl from "tweetnacl";
 import { z } from "zod";
 import type { RuntimeConfig } from "../config";
-import type { CallbackAction, ChannelTarget, DeliveryReceipt, IncomingMessage, OutgoingMessage } from "../core/types";
+import type {
+  AttachmentKind,
+  CallbackAction,
+  ChannelTarget,
+  DeliveryReceipt,
+  IncomingAttachment,
+  IncomingMessage,
+  OutgoingMessage,
+} from "../core/types";
 import { readBoundedText } from "../http/body";
 import { log } from "../observability/log";
 import { bytesToHex, constantTimeEqual, hexToBytes } from "../security/crypto";
@@ -22,7 +30,12 @@ const c2cSchema = z.object({
   timestamp: z.string(),
   message_type: z.number().int().optional(),
   message_scene: z.object({ ext: z.array(z.string()).optional() }).optional(),
-  attachments: z.array(z.object({ url: z.string().url().optional(), asr_refer_text: z.string().optional() })).optional(),
+  attachments: z.array(z.object({
+    url: z.string().url().optional(),
+    asr_refer_text: z.string().optional(),
+    content_type: z.unknown().optional(),
+    filename: z.unknown().optional(),
+  })).optional(),
   ark_data: z.object({ prompt: z.string().optional(), fields: z.record(z.string(), z.unknown()).optional() }).optional(),
   msg_elements: z.array(z.unknown()).max(100).optional(),
 });
@@ -122,7 +135,7 @@ function messageElementText(value: unknown, depth = 0): string[] {
       if (typeof attachment.asr_refer_text === "string" && attachment.asr_refer_text.trim()) {
         parts.push(attachment.asr_refer_text.trim());
       } else if (typeof attachment.url === "string" && attachment.url.trim()) {
-        parts.push(attachment.url.trim());
+        parts.push("[附件]");
       }
     }
   }
@@ -131,6 +144,56 @@ function messageElementText(value: unknown, depth = 0): string[] {
     for (const nested of element.msg_elements.slice(0, 50)) parts.push(...messageElementText(nested, depth + 1));
   }
   return parts;
+}
+
+function attachmentKind(contentType: unknown, filename: unknown): AttachmentKind {
+  const normalizedType = typeof contentType === "string" ? contentType.trim().toLowerCase() : "";
+  const topLevel = normalizedType.split("/", 1)[0];
+  if (topLevel === "image" || normalizedType === "image") return "image";
+  if (topLevel === "audio" || normalizedType === "audio") return "audio";
+  if (topLevel === "video" || normalizedType === "video") return "video";
+  const normalizedName = typeof filename === "string" ? filename.trim().toLowerCase() : "";
+  if (/\.(?:jpe?g|png|webp|gif|avif|heic)$/u.test(normalizedName)) return "image";
+  if (/\.(?:mp3|m4a|wav|ogg|opus)$/u.test(normalizedName)) return "audio";
+  if (/\.(?:mp4|mov|webm)$/u.test(normalizedName)) return "video";
+  return normalizedName ? "file" : "unknown";
+}
+
+function normalizeAttachment(value: unknown, context: IncomingAttachment["context"]): IncomingAttachment | null {
+  const attachment = objectValue(value);
+  const url = typeof attachment?.url === "string" ? attachment.url.trim() : "";
+  if (!url) return null;
+  const mediaType = typeof attachment?.content_type === "string" && attachment.content_type.trim()
+    ? attachment.content_type.trim().toLowerCase()
+    : null;
+  const filename = typeof attachment?.filename === "string" && attachment.filename.trim()
+    ? attachment.filename.trim()
+    : null;
+  return {
+    kind: attachmentKind(mediaType, filename),
+    context,
+    url,
+    mediaType,
+    filename,
+  };
+}
+
+function messageElementAttachments(value: unknown, context: IncomingAttachment["context"], depth = 0): IncomingAttachment[] {
+  if (depth > 4) return [];
+  const element = objectValue(value);
+  if (!element) return [];
+  const attachments = Array.isArray(element.attachments)
+    ? element.attachments.flatMap((entry) => {
+      const attachment = normalizeAttachment(entry, context);
+      return attachment ? [attachment] : [];
+    })
+    : [];
+  if (Array.isArray(element.msg_elements)) {
+    for (const nested of element.msg_elements.slice(0, 50)) {
+      attachments.push(...messageElementAttachments(nested, context, depth + 1));
+    }
+  }
+  return attachments;
 }
 
 function referencedMessageText(elements: unknown[] | undefined, ext: string[] | undefined): string {
@@ -142,6 +205,26 @@ function referencedMessageText(elements: unknown[] | undefined, ext: string[] | 
   const selected = matching.length > 0 ? matching : elements;
   const unique = Array.from(new Set(selected.flatMap((value) => messageElementText(value)).filter(Boolean)));
   return unique.join("\n");
+}
+
+function referencedMessageAttachments(elements: unknown[] | undefined, ext: string[] | undefined): IncomingAttachment[] {
+  if (!elements?.length) return [];
+  const targetIndex = referencedMessageIndex(ext);
+  const matching = targetIndex
+    ? elements.filter((value) => objectValue(value)?.msg_idx === targetIndex)
+    : [];
+  const selected = matching.length > 0 ? matching : elements;
+  return selected.flatMap((value) => messageElementAttachments(value, "quoted"));
+}
+
+function uniqueAttachments(attachments: IncomingAttachment[]): IncomingAttachment[] {
+  const seen = new Set<string>();
+  return attachments.filter((attachment) => {
+    const key = `${attachment.context}:${attachment.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export class QQAdapter implements ChannelAdapter {
@@ -187,27 +270,36 @@ export class QQAdapter implements ChannelAdapter {
         return { kind: "unauthorized" };
       }
       const index = messageIndex(data.message_scene?.ext);
-      const attachmentText = data.attachments?.map((attachment) => attachment.asr_refer_text ?? attachment.url ?? "").filter(Boolean).join("\n") ?? "";
+      const currentAttachments = (data.attachments ?? []).flatMap((attachment) => {
+        const normalized = normalizeAttachment(attachment, "current");
+        return normalized ? [normalized] : [];
+      });
+      const attachmentText = data.attachments?.map((attachment) => attachment.asr_refer_text ?? "").filter(Boolean).join("\n") ?? "";
       const cardText = [data.ark_data?.prompt ?? "", cardFieldText(data.ark_data?.fields)].filter(Boolean).join("\n");
       const currentText = [data.content, cardText, attachmentText].filter(Boolean).join("\n").trim();
       const referenceText = data.message_type === 103 || referencedMessageIndex(data.message_scene?.ext)
         ? referencedMessageText(data.msg_elements, data.message_scene?.ext)
         : "";
+      const quotedAttachments = data.message_type === 103 || referencedMessageIndex(data.message_scene?.ext)
+        ? referencedMessageAttachments(data.msg_elements, data.message_scene?.ext)
+        : [];
+      const attachments = uniqueAttachments([...quotedAttachments, ...currentAttachments]);
       const maxMessageChars = 100_000;
-      const currentBlock = `[当前消息]\n${currentText}`;
+      const currentDisplayText = currentText || (currentAttachments.length > 0 ? `[附件 ${currentAttachments.length} 个]` : "");
+      const currentBlock = `[当前消息]\n${currentDisplayText}`;
       const referenceOverhead = "[引用消息]\n\n[/引用消息]\n".length;
       const referenceBudget = Math.max(0, maxMessageChars - currentBlock.length - referenceOverhead);
       const boundedReference = referenceText.slice(0, referenceBudget);
       const fullText = referenceText
         ? ["[引用消息]", boundedReference, "[/引用消息]", currentBlock].join("\n").trim()
-        : currentText;
+        : currentDisplayText;
       const text = fullText.length > maxMessageChars
         ? fullText.slice(fullText.length - maxMessageChars)
         : fullText;
       if (text.length < fullText.length || boundedReference.length < referenceText.length) {
         log("warn", "qq_message_text_truncated", { originalChars: fullText.length, keptChars: text.length });
       }
-      if (!text) return { kind: "ignored" };
+      if (!text && attachments.length === 0) return { kind: "ignored" };
       const incoming: IncomingMessage = {
         channel: "qq",
         eventId: `c2c:${data.id}:${index ?? payload.id ?? "0"}`,
@@ -217,6 +309,7 @@ export class QQAdapter implements ChannelAdapter {
         timestamp: new Date(data.timestamp).toISOString(),
         eventType: "message",
         replyToMessageId: data.id,
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
       return { kind: "message", message: incoming };
     }

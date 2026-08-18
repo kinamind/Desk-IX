@@ -12,6 +12,7 @@ export interface WebPageReading {
   canonicalUrl: string | null;
   source: string;
   text: string;
+  images: string[];
   truncated: boolean;
 }
 
@@ -51,6 +52,7 @@ export async function readWebPage(
     canonicalUrl: metadata.canonicalUrl,
     source: metadata.source,
     text: metadata.text,
+    images: metadata.images,
     truncated: page.truncated,
   };
 }

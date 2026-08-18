@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentPrincipal } from "../src/agent/context";
 import { calendarSnapshot, findOwnedAvailability } from "../src/agent/tools/calendar";
 import { createItem } from "../src/db/items";
+import { rememberContext } from "../src/db/context-memory";
 import { ensureUserProfile } from "../src/db/user-profiles";
 
 const principal: AgentPrincipal = {
@@ -19,7 +20,7 @@ describe("Agent calendar tools", () => {
       locale: "zh-CN",
       dailyPlanTime: "11:00",
     });
-    await createItem(env.DB, {
+    const firstMeeting = await createItem(env.DB, {
       type: "task",
       title: "第一场讨论",
       content: "固定安排",
@@ -31,6 +32,10 @@ describe("Agent calendar tools", () => {
       sourceUserId: principal.userId,
       sourceMessageId: "calendar-tool-first",
     });
+    await rememberContext(env.DB, principal, {
+      entities: [{ key: "ivy", kind: "person", name: "Ivy" }],
+      itemLinks: [{ itemId: firstMeeting.id, entity: "ivy", role: "participant" }],
+    }, "calendar-tool-participant");
     await createItem(env.DB, {
       type: "task",
       title: "第二场讨论",
@@ -51,6 +56,9 @@ describe("Agent calendar tools", () => {
 
     expect(result.timezone).toBe("Asia/Singapore");
     expect(result.entries).toHaveLength(2);
+    expect(result.entries.find((entry) => entry.itemId === firstMeeting.id)?.participants).toEqual([
+      expect.objectContaining({ name: "Ivy", role: "participant" }),
+    ]);
     expect(result.conflicts).toHaveLength(1);
   });
 

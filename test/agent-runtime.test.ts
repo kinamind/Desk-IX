@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { parseTurnPrincipal, stampTurnPrincipal, type AgentPrincipal } from "../src/agent/context";
 import { DESK_IX_PERSONA } from "../src/agent/prompt";
+import { forgetContextSchema, rememberContextSchema } from "../src/agent/tools/context-memory";
 import {
   lifecycleFollowupInputSchema,
   profileUpdateSchema,
@@ -83,7 +84,12 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("识别为“同一篇”只用于避免重复建记录");
     expect(DESK_IX_PERSONA).toContain("calendar-* 技能");
     expect(DESK_IX_PERSONA).toContain("截止时间、固定事件、提醒和实际投入工作的时段");
+    expect(DESK_IX_PERSONA).toContain("media_read");
+    expect(DESK_IX_PERSONA).toContain("context_remember");
+    expect(DESK_IX_PERSONA).toContain("会议、材料和后续行动是不同对象");
     expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
+    expect(z.toJSONSchema(rememberContextSchema)).toMatchObject({ type: "object" });
+    expect(z.toJSONSchema(forgetContextSchema)).toMatchObject({ type: "object" });
   });
 });

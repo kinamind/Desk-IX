@@ -65,6 +65,7 @@ https://kinamind.org/desk/webhooks/qq
 ## 5. 消息与按钮行为
 
 - 收消息：`C2C_MESSAGE_CREATE`，使用 `message id + msg_idx` 去重。
+- 图片附件：当前消息和引用消息里的图片都会保存为当前用户专属的内部附件引用，需要内容时由 `media_read` 立即读取真实图片并缓存视觉文字；不会把 QQ 临时签名地址拼进消息正文或普通回复，也不会要求用户重复上传已经收到的附件。
 - 分享卡片：合并 `ark_data.prompt`、隐藏 fields 与附件文本；其中出现正常 HTTP(S) URL 时继续调用网页阅读工具。若平台只给内部卡片 ID/小程序 scheme，则保留并理解预览内容，但不会猜造公开网址。
 - 回复：`POST /v2/users/{user_openid}/messages`；即时回复携带原 `msg_id`。
 - 主动提醒：同一 endpoint，不携带原 `msg_id`，因此依赖主动消息授权。
@@ -81,3 +82,4 @@ https://kinamind.org/desk/webhooks/qq
 - 按钮不显示：申请 keyboard 权限；Desk-IX 会退化为纯文本，仍可发自然语言操作。
 - `QQBot` token 错误：确认 `QQ_APP_SECRET`；Access Token 由 Worker 临时获取，不持久化、不记录日志。
 - 卡片能保存但读不到原网页：检查 QQ 回调是否提供正常 HTTP(S) 跳转地址；内部卡片 ID 无法可靠反推出公开 URL。
+- 图片首次读取失败：Desk-IX 会保留附件状态并说明模型、来源失效或格式问题。当前长期保存视觉分析结果而不是原图；如果首次分析前临时来源已经过期，才需要重新发送图片。

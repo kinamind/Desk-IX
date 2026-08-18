@@ -5,6 +5,7 @@ import type { Item } from "../../core/types";
 import { getOwnedItem, listOwnedItemReminders, searchOwnedItemsNatural } from "../../db/items";
 import { ensureUserProfile, getUserProfile } from "../../db/user-profiles";
 import { listOwnedWorkSessions } from "../../db/work-sessions";
+import { listOwnedItemParticipants } from "../../db/context-memory";
 import { discoverUrls, readWebPagesFromText } from "../../url/reader";
 import type { AgentPrincipal } from "../context";
 
@@ -38,6 +39,12 @@ export async function memorySearch(
   limit = 8,
 ) {
   const result = await searchOwnedItemsNatural(env.DB, principal.channel, principal.userId, query, limit);
+  const participants = await listOwnedItemParticipants(
+    env.DB,
+    principal.channel,
+    principal.userId,
+    result.items.map((item) => item.id),
+  );
   return {
     query,
     count: result.items.length,
@@ -53,6 +60,7 @@ export async function memorySearch(
       url: item.url,
       snippet: item.content,
       links: discoverUrls([item.url ?? "", item.content, item.rawMessage].join("\n")),
+      participants: participants.get(item.id) ?? [],
     })),
   };
 }
@@ -62,7 +70,8 @@ export async function loadOwnedItem(env: Env, principal: AgentPrincipal, itemId:
   if (!item) throw new Error("Item not found in the current user's memory");
   const reminders = await listOwnedItemReminders(env.DB, item.id, principal.channel, principal.userId);
   const workSessions = await listOwnedWorkSessions(env.DB, item.id, principal.channel, principal.userId);
-  return { item: compactItem(item), reminders, workSessions };
+  const participants = await listOwnedItemParticipants(env.DB, principal.channel, principal.userId, [item.id]);
+  return { item: compactItem(item), reminders, workSessions, participants: participants.get(item.id) ?? [] };
 }
 
 export async function readOwnedWebPages(
@@ -89,6 +98,7 @@ export async function readOwnedWebPages(
       canonicalUrl: page.canonicalUrl,
       source: page.source,
       text: page.text,
+      images: page.images,
       truncated: page.truncated,
     })),
     failures: batch.failures,
@@ -121,7 +131,7 @@ export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet
       execute: ({ itemId }) => loadOwnedItem(env, principal(), itemId),
     }),
     web_read: tool({
-      description: "Read ordinary public web pages. Supply explicit URLs or an owned itemId to read every relevant link stored on that item. Use this whenever the requested operation depends on what linked pages actually say; the fetcher retains SSRF, timeout, and per-page byte protections.",
+      description: "Read ordinary public web pages. Supply explicit URLs or an owned itemId to read every relevant link stored on that item. Use this whenever the requested operation depends on what linked pages actually say; results also expose public image candidates from page markup so you can pass relevant ones to media_read. The fetcher retains SSRF, timeout, and per-page byte protections.",
       inputSchema: z.object({
         itemId: z.string().uuid().optional(),
         urls: z.array(z.string().url()).optional(),

@@ -94,6 +94,37 @@ describe("QQ adapter", () => {
     expect(parsed.message.text).toContain("https://example.com/jobs/ra");
   });
 
+  it("preserves a QQ image as structured media without flattening its signed URL into instructions", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret);
+    const imageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=temporary&rkey=signed";
+    const body = JSON.stringify({
+      id: "event-image",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-image",
+        author: { user_openid: "qq-user-42" },
+        content: "",
+        timestamp: "2026-08-18T06:35:19.000Z",
+        attachments: [{ url: imageUrl, content_type: "image/jpeg", filename: "meeting.jpg" }],
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    const parsed = await adapter.parseWebhook(qqRequest(body, signature));
+
+    expect(parsed).toMatchObject({ kind: "message" });
+    if (parsed.kind !== "message") throw new Error("Expected message");
+    expect(parsed.message.text).toContain("附件");
+    expect(parsed.message.text).not.toContain(imageUrl);
+    expect(parsed.message.attachments).toEqual([{
+      kind: "image",
+      context: "current",
+      url: imageUrl,
+      mediaType: "image/jpeg",
+      filename: "meeting.jpg",
+    }]);
+  });
+
   it("preserves the quoted message body for QQ reference messages", async () => {
     const adapter = new QQAdapter(testConfig(), officialSecret);
     const body = JSON.stringify({
@@ -131,6 +162,40 @@ describe("QQ adapter", () => {
       "这个还没完成，明天继续提醒我",
     ].join("\n"));
     expect(parsed.message.eventId).toBe("c2c:message-reference:current-message");
+  });
+
+  it("preserves quoted image attachments as reference evidence", async () => {
+    const adapter = new QQAdapter(testConfig(), officialSecret);
+    const imageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=quoted&rkey=signed";
+    const body = JSON.stringify({
+      id: "event-reference-image",
+      op: 0,
+      t: "C2C_MESSAGE_CREATE",
+      d: {
+        id: "message-reference-image",
+        author: { user_openid: "qq-user-42" },
+        content: "组会要讲这个，记录一下",
+        timestamp: "2026-08-18T06:35:50.000Z",
+        message_type: 103,
+        message_scene: { ext: ["ref_msg_idx=reference-image", "msg_idx=current-image-instruction"] },
+        msg_elements: [{
+          msg_idx: "reference-image",
+          attachments: [{ url: imageUrl, content_type: "image/jpeg" }],
+        }],
+      },
+    });
+    const signature = adapter.signChallenge("1725442341", body);
+    const parsed = await adapter.parseWebhook(qqRequest(body, signature));
+
+    expect(parsed).toMatchObject({ kind: "message" });
+    if (parsed.kind !== "message") throw new Error("Expected message");
+    expect(parsed.message.text).toContain("[引用消息]");
+    expect(parsed.message.text).toContain("[附件]");
+    expect(parsed.message.text).toContain("组会要讲这个，记录一下");
+    expect(parsed.message.text).not.toContain(imageUrl);
+    expect(parsed.message.attachments).toEqual([
+      expect.objectContaining({ kind: "image", context: "quoted", url: imageUrl }),
+    ]);
   });
 
   it("never truncates the current instruction behind a long quoted message", async () => {

@@ -1,6 +1,7 @@
 import { getAgentByName } from "agents";
 import type { IncomingMessage } from "../core/types";
 import { claimMessage, failMessage } from "../db/messages";
+import { saveIncomingMediaAssets } from "../db/media";
 import { log } from "../observability/log";
 
 async function sessionName(channel: IncomingMessage["channel"], userId: string): Promise<string> {
@@ -13,13 +14,21 @@ export async function submitAgentMessage(env: Env, incoming: IncomingMessage): P
   if (incoming.eventType !== "message") throw new Error("Only ordinary messages can enter the agent runtime");
   const claim = await claimMessage(env.DB, incoming);
   try {
+    const mediaAssets = await saveIncomingMediaAssets(env.DB, incoming);
+    const mediaContext = mediaAssets.length > 0
+      ? [
+        "[媒体附件]",
+        ...mediaAssets.map((asset) => `- attachmentId=${asset.id} kind=${asset.kind} context=${asset.context} status=${asset.analysisStatus}`),
+        "[/媒体附件]",
+      ].join("\n")
+      : "";
     const name = await sessionName(incoming.channel, incoming.userId);
     const agent = await getAgentByName(env.COMPOSA_AGENT, name);
     const submission = await agent.receive({
       channel: incoming.channel,
       userId: incoming.userId,
       eventId: incoming.eventId,
-      text: incoming.text,
+      text: [incoming.text, mediaContext].filter(Boolean).join("\n"),
       receivedAt: incoming.timestamp,
       ...(incoming.replyToMessageId ? { replyToMessageId: incoming.replyToMessageId } : {}),
     });
