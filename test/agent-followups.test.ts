@@ -73,6 +73,7 @@ describe("agent-owned lifecycle follow-ups", () => {
   });
 
   it("verifies ownership, schedules reviews, and cancels them on terminal transitions", async () => {
+    const reviewAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const item = await createItem(env.DB, {
       type: "task",
       title: "固定安排",
@@ -85,7 +86,7 @@ describe("agent-owned lifecycle follow-ups", () => {
     const set = vi.fn<LifecycleFollowupController["set"]>().mockResolvedValue({
       scheduled: true,
       scheduleId: "schedule-1",
-      reviewAt: "2026-08-18T08:00:00.000Z",
+      reviewAt,
     });
     const cancel = vi.fn<LifecycleFollowupController["cancel"]>().mockResolvedValue({ canceled: 1 });
     const controller: LifecycleFollowupController = { set, cancel };
@@ -93,14 +94,14 @@ describe("agent-owned lifecycle follow-ups", () => {
     await expect(manageOwnedLifecycleFollowup(env, principal, {
       operation: "set",
       itemId: item.id,
-      reviewAt: "2026-08-18T08:00:00.000Z",
+      reviewAt,
       reason: "到点后结合上下文判断是否结束",
     }, controller)).resolves.toMatchObject({ scheduled: true, scheduleId: "schedule-1" });
     expect(set).toHaveBeenCalledWith({
       itemId: item.id,
       channel: principal.channel,
       userId: principal.userId,
-      reviewAt: "2026-08-18T08:00:00.000Z",
+      reviewAt,
       reason: "到点后结合上下文判断是否结束",
     });
 

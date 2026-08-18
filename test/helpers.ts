@@ -15,6 +15,7 @@ export function testConfig(): RuntimeConfig {
     aiDailyRequestLimit: 100,
     urlFetchTimeoutMs: 1_000,
     urlMaxBytes: 524_288,
+    mediaMaxBytes: 20_000_000,
     xhsMaxBytes: 2_000_000,
     telegramAllowedUserIds: new Set(["42"]),
     qqAllowedUserOpenIds: new Set(["qq-user-42"]),

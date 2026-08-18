@@ -4,6 +4,7 @@ export interface PageMetadata {
   canonicalUrl: string | null;
   source: string;
   text: string;
+  images: string[];
 }
 
 function decodeEntities(value: string): string {
@@ -38,6 +39,25 @@ function metaContent(html: string, key: string): string | null {
   return null;
 }
 
+function imageUrls(html: string, finalUrl: string): string[] {
+  const candidates = [
+    metaContent(html, "og:image"),
+    metaContent(html, "twitter:image"),
+    ...Array.from(html.matchAll(/<img\b[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi), (match) => clean(match[1] ?? "")),
+  ].filter((value): value is string => Boolean(value));
+  const images: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate, finalUrl);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      if (!images.includes(url.toString())) images.push(url.toString());
+    } catch {
+      // Ignore malformed markup candidates; the page text remains readable.
+    }
+  }
+  return images;
+}
+
 export function extractPageMetadata(html: string, finalUrl: string): PageMetadata {
   const title = metaContent(html, "og:title") ?? (clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "") || null);
   const description = metaContent(html, "description") ?? metaContent(html, "og:description");
@@ -54,5 +74,6 @@ export function extractPageMetadata(html: string, finalUrl: string): PageMetadat
     canonicalUrl: canonical ? new URL(canonical, finalUrl).toString() : null,
     source: new URL(finalUrl).hostname,
     text: clean(stripped),
+    images: imageUrls(html, finalUrl),
   };
 }

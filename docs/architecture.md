@@ -30,7 +30,7 @@ sequenceDiagram
   C->>W: 已验证 webhook
   W->>W: allowlist + 事件去重
   W->>S: 以 eventId 幂等提交
-  S->>M: 会话历史 + 个人档案 + 当前时间 + 待处理交互
+  S->>M: 会话历史 + 个人档案 + 相关人物/工作上下文 + 当前时间 + 待处理交互
   loop 直到模型自然完成
     M->>T: 原生 tool call
     T->>D: 校验后读取或写入
@@ -47,17 +47,19 @@ sequenceDiagram
 
 ## Agent 能看到的工具
 
-运行时只开放 Desk-IX 的七个读取工具、两个按需技能工具和七个受控写操作：
+运行时只开放 Desk-IX 的九个读取工具、两个按需技能工具和九个受控写操作：
 
 | 工具 | 用途 |
 |---|---|
 | `memory_search` | 搜索当前用户的事项，解析“刚才那个”等指代 |
 | `item_get` | 读取一个确定事项及其提醒、工作时段 |
 | `web_read` | 读取用户提供的普通公开网页，或读取事项中保存的链接 |
+| `media_read` | 读取 QQ 当前/引用图片或普通网页、GitHub 的公开图片，并缓存视觉理解结果 |
 | `xiaohongshu_read` | 通过可选账号会话读取用户明确分享的小红书帖子，并区分登录、失效与内容不可用 |
 | `calendar_snapshot` | 在明确起止范围内读取事件、截止、工作时段、提醒和真实冲突 |
 | `availability_find` | 在明确范围内返回全部满足所需时长的空档，不替 Agent 排名 |
 | `profile_get` | 读取当前用户的称呼、时区、作息与沟通偏好 |
+| `context_search` | 搜索人物、团队、机构、地点和个人/工作事实及其事项关联 |
 | `activate_skill` | 按需加载 calendar-read / plan / manage / review 或 xiaohongshu-organize 的详细流程 |
 | `read_skill_resource` | 读取技能附带资源；当前技能仅含说明，不执行脚本 |
 | `item_create` | 新建真正的新事项 |
@@ -67,6 +69,8 @@ sequenceDiagram
 | `work_session_manage` | 整体替换或取消一个事项的实际工作时段 |
 | `lifecycle_followup_manage` | 由 Agent 为具体事项安排或取消事后复盘 |
 | `profile_update` | 更新当前用户明确表达或授权自主选择的个人偏好 |
+| `context_remember` | 保存值得长期使用、带来源/置信度/有效期的个人或社会上下文 |
+| `context_forget` | 按用户明确要求撤回事实或删除人物/组织实体，不影响无关事项 |
 
 模型没有 bash、文件系统、MCP 或任意网络请求能力。读取工具先从当前会话身份取得 `channel + userId`；写工具还要求运行时权限，并为每个动作生成稳定幂等键。
 
@@ -84,8 +88,12 @@ memory_search → item_get → web_read → item_update → 自然语言说明�
 - `reminders`：提醒时间、通道目标、Workflow 与投递状态。
 - `work_sessions`：Agent 结合真实日历规划的实际投入时段，可整体改期并参与冲突检测。
 - `messages`：Webhook 事件去重、处理状态、错误和回复审计。
+- `media_assets`：QQ 当前或引用附件的私有来源、分析状态与缓存后的视觉文字；签名来源不进入普通回复。
 - `pending_actions`：按钮“改期”后的短期上下文，由下一轮 Agent 直接取得精确 item ID。
 - `user_profiles`：相互称呼、每用户时区、每日安排订阅与时间、作息目标和沟通偏好。
+- `context_entities`、`context_entity_aliases`：当前用户认识的人物、团队、机构、地点及别名；不做跨用户联系人图谱。
+- `context_facts`：关于用户自己或实体的开放事实，保存来源消息、置信度、适用事项、有效期、敏感性与撤回状态。
+- `item_context_entities`：把人物/组织以 participant、organizer、collaborator 等开放角色关联到现有会议、任务、资料或项目。
 - `daily_plan_runs`、`ai_usage`：每日计划幂等与 AI 预算。
 - Durable Object SQLite：Think 会话状态、submission 状态，以及 Desk-IX 自己的 turn-origin / reply-outbox 表。
 
@@ -93,9 +101,21 @@ Think 是实验性依赖，限定在 `src/agent/` 内。即使未来替换运行
 
 ## 网页、提醒与生命周期
 
-`web_read` 只接受普通公开 HTTP(S) 地址，手动验证每次跳转，限制超时、正文类型和单页体积，不绕过登录、验证码或反爬。网页正文被视为不可信证据，不能授予权限，也不能覆盖用户指令。
+`web_read` 只接受普通公开 HTTP(S) 地址，手动验证每次跳转，限制超时、正文类型和单页体积，不绕过登录、验证码或反爬。网页正文被视为不可信证据，不能授予权限，也不能覆盖用户指令。除了正文，它还返回页面公开声明的图片候选；Agent 只在用户请求需要视觉内容时把相关候选交给 `media_read`。
 
-`xiaohongshu_read` 是独立的域名限定读取器，只接受小红书正式域名和分享短链，并在每次跳转后重新校验。可替换的 `XHS_COOKIE` 只会发送给 `xiaohongshu.com` 及其子域，绝不会发送给短链、图片 CDN 或 AI Provider。页面状态以数据解析，不执行站点 JavaScript；正文读取成功后，工具把 `xiaohongshu.com` / `xhscdn.com` 的可信配图 URL 作为标准多模态输入交给同一个已配置模型，图片中的提示词只作为不可信资料转录。工具分别报告正文和视觉状态，视觉失败不会抹掉正文。它只处理用户明确分享的链接，不在后台遍历账号主页、推荐流或收藏夹。
+QQ 图片不会再被压成普通消息里的临时下载地址。Webhook 适配器把当前附件和引用附件保留为结构化媒体，Ingress 在 D1 生成当前用户专属的 `attachmentId`，Agent 再调用 `media_read`。媒体读取器接受公网 HTTP 和 HTTPS，逐次验证跳转与 SSRF，按流读取并以模型/运行时安全体积为界，依据真实字节而非文件扩展名识别 JPEG、PNG、WebP、GIF 或 AVIF。实际图片字节作为标准多模态输入交给配置的模型；视觉结果缓存后可在签名地址失效后继续用于检索和整理。原始图片暂不长期复制到对象存储，因此在首次分析失败且来源后来过期时仍可能需要用户重发。
+
+`xiaohongshu_read` 是域名限定的来源适配器，只接受小红书正式域名和分享短链，并在每次跳转后重新校验。可替换的 `XHS_COOKIE` 只会发送给 `xiaohongshu.com` 及其子域，绝不会发送给短链、图片 CDN 或 AI Provider。页面状态以数据解析，不执行站点 JavaScript；正文读取成功后，可信配图交给与 QQ/网页图片相同的通用视觉核心，图片中的提示词只作为不可信资料转录。工具分别报告正文和视觉状态，视觉失败不会抹掉正文。它只处理用户明确分享的链接，不在后台遍历账号主页、推荐流或收藏夹。
+
+## 个人与社会上下文
+
+`user_profiles` 继续保存时区、称呼、作息等稳定且结构固定的偏好；工作身份、主要协作者、团队、地点和项目关系进入开放的上下文记忆。代码不从“见面”“会议”等关键词推断关系标签，也不按人物类型套安排规则。模型在上下文确实会改善后续理解或规划时调用 `context_remember`，并为推断事实使用较低置信度，为一次性事实设置有效期或只关联具体事项。
+
+每轮只检索消息中相关的人物/组织及仍有效的个人事实，不把整个社会关系表塞进提示词。`item_get` 和 `calendar_snapshot` 返回与事项关联的参与者，因此 Agent 可以结合对方时区、地点、具体项目、历史交互和当前承诺判断准备、通勤、跟进或冲突；这些信息只是证据，具体时间仍由 Agent 判断。
+
+用户纠正或要求遗忘时，Agent 先用 `context_search` 取得精确事实/实体 ID，再调用 `context_forget`。撤回按当前用户隔离，不删除无关事项。一次 meeting 延迟不会自动变成“某人经常迟到”，也不会从一次会面推断亲密、健康、政治等敏感关系。
+
+会议 event、会议材料 note/resource 和后续 task/project 始终分开。会议结束可以完成 event；材料可以记录“已使用/已讲过”并继续作为资料存在，不能因为会议结束就声称资料状态也已完成。
 
 相邻平台分享卡片和下一句“整理这个、刚才那个”由会话历史绑定为同一对象。若第一轮已经保存部分 raw 记录，Agent 会查找、读取并更新同一 item；只有完整读取和整理后才把状态改为 open，正文仍不可用时继续保留 raw 与可核对来源。
 
@@ -118,6 +138,7 @@ Daily Plan 仍由 Cron 每 15 分钟唤醒，但发送对象、IANA 时区和偏
 ## 安全、成本与已知边界
 
 - 所有 SQL 参数化；所有业务读写按 `channel + userId` 隔离。
+- 媒体附件、人物、别名、事实和事项关联同样按 `channel + userId` 校验所有权；工具结果不回显 QQ 签名地址。
 - Telegram secret、Admin token 与 QQ Ed25519 验签保持在 Agent 入口之外。
 - 工具循环由模型自然完成；单次模型/工具网络操作仍有失效保护，运行时无进展恢复与每日请求预算防止真实故障失控。
 - 回复先记入 DO outbox 再调用平台；失败可在重复 webhook 时恢复。
