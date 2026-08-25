@@ -17,9 +17,15 @@ import { getPendingAction } from "../db/pending-actions";
 import { ensureUserProfile, getUserProfile } from "../db/user-profiles";
 import { log } from "../observability/log";
 import { localDate } from "../core/time";
+import {
+  presentTurnReplyOrFallback,
+  TurnPresentationBarrier,
+  withVisibleAssistantText,
+} from "./attention";
 import { parseTurnPrincipal, safeParseTurnPrincipal, stampTurnPrincipal } from "./context";
 import {
   deliverTurnResponse,
+  getTurnOriginPrincipal,
   messageText,
   migrateAgentDelivery,
   rememberTurnOrigin,
@@ -75,6 +81,8 @@ const ACTIVE_TOOLS = [
 ];
 
 export class ComposaAgent extends Think<Env> {
+  private readonly presentationBarrier = new TurnPresentationBarrier();
+
   override workspaceBash = false;
   override includeMcpTools = false;
   override messageConcurrency: MessageConcurrency = "queue";
@@ -130,6 +138,7 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig> {
+    await this.presentationBarrier.wait();
     const principal = parseTurnPrincipal(this.activeTurnMetadata);
     const config = getConfig(this.env);
     const now = new Date();
@@ -335,36 +344,92 @@ export class ComposaAgent extends Think<Env> {
   }
 
   override async onChatResponse(result: ChatResponseResult): Promise<void> {
-    let text = result.status === "completed"
-      ? messageText(result.message)
-      : "这次处理被中断了，我没有擅自继续操作。你可以直接重发刚才的要求。";
-    if (result.status === "completed" && !text) {
-      const principal = safeParseTurnPrincipal(this.activeTurnMetadata);
+    const presentationLease = this.presentationBarrier.begin();
+    await presentationLease.ready;
+    try {
+      let text = result.status === "completed"
+        ? messageText(result.message)
+        : "这次处理被中断了，我没有擅自继续操作。你可以直接重发刚才的要求。";
+      const principal = result.status === "completed"
+        ? safeParseTurnPrincipal(this.activeTurnMetadata)
+          ?? getTurnOriginPrincipal(this.ctx.storage.sql, result.requestId)
+        : null;
+      let originalText: string | null = null;
+      let profile = null;
       if (principal) {
         try {
-          text = await synthesizeTurnReply(this.env, {
-            principal,
-            originalText: await getMessageTextBySource(this.env.DB, principal.channel, principal.eventId),
-            responseParts: result.message.parts,
-          });
+          [originalText, profile] = await Promise.all([
+            getMessageTextBySource(this.env.DB, principal.channel, principal.eventId),
+            getUserProfile(this.env.DB, principal.channel, principal.userId),
+          ]);
         } catch (error) {
-          log("error", "agent_empty_response_synthesis_failed", {
+          log("error", "agent_attention_context_load_failed", {
             requestId: result.requestId,
-            error: error instanceof Error ? error.message : String(error),
+            errorType: error instanceof Error ? error.name : "unknown",
           });
         }
       }
-      if (!text) {
-        text = "刚才的工具操作已经结束，但回复收尾失败了。我保留了实际记录；你可以直接让我核对刚才的结果，不需要重复原要求。";
+      if (result.status === "completed" && !text) {
+        if (principal) {
+          try {
+            text = await synthesizeTurnReply(this.env, {
+              principal,
+              originalText,
+              responseParts: result.message.parts,
+            });
+          } catch (error) {
+            log("error", "agent_empty_response_synthesis_failed", {
+              requestId: result.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        if (!text) {
+          text = "刚才的工具操作已经结束，但回复收尾失败了。我保留了实际记录；你可以直接让我核对刚才的结果，不需要重复原要求。";
+        }
       }
+      const backstageChars = text.length;
+      let attentionPresented = false;
+      if (result.status === "completed" && principal) {
+        const presentation = await presentTurnReplyOrFallback(this.env, {
+          channel: principal.channel,
+          originalText,
+          backstageDraft: text,
+          completedTurnParts: result.message.parts,
+          profile,
+        });
+        text = presentation.text;
+        attentionPresented = presentation.presented;
+        if (!presentation.presented) {
+          log("error", "agent_attention_presentation_failed", {
+            requestId: result.requestId,
+            errorType: presentation.error instanceof Error ? presentation.error.name : "unknown",
+          });
+        }
+      }
+      if (messageText(result.message) !== text) {
+        try {
+          await this.addMessages([withVisibleAssistantText(result.message, text)], { mode: "upsert" });
+        } catch (error) {
+          log("error", "agent_visible_transcript_sync_failed", {
+            requestId: result.requestId,
+            errorType: error instanceof Error ? error.name : "unknown",
+          });
+        }
+      }
+      await deliverTurnResponse(this.env, this.ctx.storage.sql, result.requestId, text);
+      log(result.status === "error" ? "error" : "info", "agent_turn_finished", {
+        requestId: result.requestId,
+        status: result.status,
+        continuation: result.continuation,
+        error: result.error,
+        attentionPresented,
+        backstageChars,
+        visibleChars: text.length,
+      });
+    } finally {
+      presentationLease.finish();
     }
-    await deliverTurnResponse(this.env, this.ctx.storage.sql, result.requestId, text);
-    log(result.status === "error" ? "error" : "info", "agent_turn_finished", {
-      requestId: result.requestId,
-      status: result.status,
-      continuation: result.continuation,
-      error: result.error,
-    });
   }
 
   override onChatError(error: unknown): unknown {
@@ -386,6 +451,9 @@ export class ComposaAgent extends Think<Env> {
       sessionReady: Boolean(this.session),
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
+      presentation: "attention-director-renderer",
+      presentationFallback: "brief-then-backstage",
+      presentationOrdering: "barrier-before-next-turn",
       skills: [...CALENDAR_SKILL_NAMES, ...XIAOHONGSHU_SKILL_NAMES],
     };
   }

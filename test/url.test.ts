@@ -41,26 +41,70 @@ describe("URL safety and extraction", () => {
 
   it("validates redirects and truncates oversized streams", async () => {
     const calls: string[] = [];
-    const fetcher: typeof fetch = async (input) => {
+    const requestHeaders: Headers[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       calls.push(url);
+      requestHeaders.push(new Headers(init?.headers));
       if (url === "https://example.com/start") {
         return new Response(null, { status: 302, headers: { location: "/final" } });
       }
-      return new Response("abcdefghij", { headers: { "content-type": "text/html" } });
+      return new Response("abcdefghij", { headers: { "content-type": "text/plain" } });
     };
-    await expect(fetchPage("https://example.com/start", { timeoutMs: 1_000, maxBytes: 5 }, fetcher)).resolves.toEqual({
+    await expect(fetchPage("https://example.com/start", { timeoutMs: 1_000, maxTextBytes: 5 }, fetcher)).resolves.toEqual({
       url: "https://example.com/final",
-      contentType: "text/html",
-      body: "abcde",
+      contentType: "text/plain",
+      title: null,
+      description: null,
+      canonicalUrl: null,
+      source: "example.com",
+      text: "abcde",
+      images: [],
       truncated: true,
     });
     expect(calls).toEqual(["https://example.com/start", "https://example.com/final"]);
+    expect(requestHeaders[0]?.get("user-agent")).toContain("Mozilla/5.0");
+    expect(requestHeaders[0]?.get("accept-language")).toContain("zh-CN");
+  });
+
+  it("does not let a large script and style preamble consume the visible-text budget", async () => {
+    const preamble = `<script>${"ignored()".repeat(4_000)}</script><style>${"x".repeat(20_000)}</style>`;
+    const article = "公开文章正文：这是需要交给 Agent 理解和整理的内容。";
+    const fetcher: typeof fetch = async () => new Response(
+      `<html><head><meta property="og:title" content="公众号文章"></head><body>${preamble}<article id="js_content">${article}</article></body></html>`,
+      { headers: { "content-type": "text/html" } },
+    );
+
+    const reading = await readWebPage("https://mp.weixin.qq.com/s/public-article", {
+      urlFetchTimeoutMs: 1_000,
+      urlMaxTextBytes: 1_024,
+    }, fetcher);
+
+    expect(reading).toMatchObject({ title: "公众号文章", truncated: false });
+    expect(reading.text).toContain(article);
+    expect(reading.text).not.toContain("ignored()");
+    expect(reading.text).not.toContain("xxxxx");
+  });
+
+  it("bounds actual visible text rather than raw markup", async () => {
+    const visibleText = `正文${"内容".repeat(2_000)}`;
+    const fetcher: typeof fetch = async () => new Response(visibleText, {
+      headers: { "content-type": "text/plain" },
+    });
+
+    const reading = await readWebPage("https://example.com/long-note", {
+      urlFetchTimeoutMs: 1_000,
+      urlMaxTextBytes: 256,
+    }, fetcher);
+
+    expect(reading.truncated).toBe(true);
+    expect(new TextEncoder().encode(reading.text).byteLength).toBeLessThanOrEqual(256);
+    expect(reading.text).toContain("正文");
   });
 
   it("blocks redirects to private destinations", async () => {
     const fetcher: typeof fetch = async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/" } });
-    await expect(fetchPage("https://example.com", { timeoutMs: 1_000, maxBytes: 1_000 }, fetcher)).rejects.toThrow("Private");
+    await expect(fetchPage("https://example.com", { timeoutMs: 1_000, maxTextBytes: 1_000 }, fetcher)).rejects.toThrow("Private");
   });
 
   it("discovers card links and returns a bounded readable webpage", async () => {
@@ -69,15 +113,28 @@ describe("URL safety and extraction", () => {
       "https://example.org/",
     ]);
     const fetcher: typeof fetch = async () => new Response(
-      "<html><head><title>招聘信息</title></head><body><main>招募研究助理，周五截止。</main></body></html>",
+      `<html><head><title>招聘信息</title><meta property="og:title" content="">
+      <meta name="description" content="岗位说明"><meta property="og:image" content="/cover.jpg">
+      <meta name="twitter:image" content="/social.jpg"><link rel="canonical" href="/canonical"></head>
+      <body><main><p>招募研究助理。</p><p>周五截止，原文写作 &amp;amp; FAQ。</p>
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/detail.png"></main></body></html>`,
       { headers: { "content-type": "text/html" } },
     );
-    const reading = await readWebPage("https://example.com/post", { urlFetchTimeoutMs: 1_000, urlMaxBytes: 20_000 }, fetcher);
+    const reading = await readWebPage("https://example.com/post", { urlFetchTimeoutMs: 1_000, urlMaxTextBytes: 20_000 }, fetcher);
     expect(reading).toMatchObject({
       title: "招聘信息",
+      description: "岗位说明",
+      canonicalUrl: "https://example.com/canonical",
+      images: [
+        "https://example.com/cover.jpg",
+        "https://example.com/social.jpg",
+        "https://example.com/detail.png",
+      ],
       source: "example.com",
       truncated: false,
     });
-    expect(reading.text).toContain("招募研究助理");
+    expect(reading.text).toContain("招募研究助理。 周五截止");
+    expect(reading.text).toContain("&amp; FAQ");
+    expect(reading.text).not.toContain("原文写作 & FAQ");
   });
 });

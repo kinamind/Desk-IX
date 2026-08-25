@@ -20,7 +20,7 @@ allowed-tools: calendar_snapshot availability_find memory_search item_get profil
 
 ## 回答方式
 
-按用户真正关心的粒度组织，不强制套固定日报格式。清楚区分：
+先读取足够事实，再按用户真正关心的粒度组织交接；后台读取范围可以比前台展示范围大，不强制套固定日报格式。清楚区分：
 
 - 已经确定或保存的安排；
 - 仅有截止但尚未安排投入时间的事项；
@@ -28,5 +28,7 @@ allowed-tools: calendar_snapshot availability_find memory_search item_get profil
 - 你准备提出、但尚未写入的建议。
 
 报告 `calendar_snapshot` 返回的真实冲突。用户问“什么时候有空”或需要满足某个时长时，调用 `availability_find`；它返回所有合格空档，你再结合档案、语境和目标判断哪些值得推荐。不要把空档列表本身说成已经安排。
+
+不要因为用户问一段日程就附带输出全部历史或已完成事项；只有它们会改变当前判断，或用户明确要求完整盘点时才展开。
 
 没有条目时直接说明该范围内内部日程为空，不要据此断言用户现实中没有其他安排。

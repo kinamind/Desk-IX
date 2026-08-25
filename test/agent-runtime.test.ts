@@ -29,6 +29,9 @@ describe("ComposaAgent runtime", () => {
       sessionReady: true,
       mcpTools: false,
       workspaceBash: false,
+      presentation: "attention-director-renderer",
+      presentationFallback: "brief-then-backstage",
+      presentationOrdering: "barrier-before-next-turn",
       skills: ["calendar-read", "calendar-plan", "calendar-manage", "calendar-review", "xiaohongshu-organize"],
     });
   });
@@ -87,6 +90,10 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("media_read");
     expect(DESK_IX_PERSONA).toContain("context_remember");
     expect(DESK_IX_PERSONA).toContain("会议、材料和后续行动是不同对象");
+    expect(DESK_IX_PERSONA).toContain("后台认知与执行层");
+    expect(DESK_IX_PERSONA).toContain("完整性属于后台状态");
+    expect(DESK_IX_PERSONA).toContain("独立前台注意力层");
+    expect(DESK_IX_PERSONA).toContain("不要用固定条数");
     expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
     expect(z.toJSONSchema(rememberContextSchema)).toMatchObject({ type: "object" });

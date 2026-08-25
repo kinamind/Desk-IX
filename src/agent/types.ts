@@ -22,5 +22,8 @@ export interface RuntimeProfile {
   sessionReady: boolean;
   mcpTools: boolean;
   workspaceBash: boolean;
+  presentation: "attention-director-renderer";
+  presentationFallback: "brief-then-backstage";
+  presentationOrdering: "barrier-before-next-turn";
   skills: string[];
 }

@@ -1,15 +1,15 @@
 import { validatePublicHttpUrl } from "../security/ssrf";
+import { extractPageMetadataFromResponse, type PageMetadata } from "./extract";
 
-export interface FetchedPage {
+export interface FetchedPage extends PageMetadata {
   url: string;
   contentType: string;
-  body: string;
   truncated: boolean;
 }
 
 export interface UrlFetchOptions {
   timeoutMs: number;
-  maxBytes: number;
+  maxTextBytes: number;
   maxRedirects?: number;
 }
 
@@ -29,8 +29,9 @@ export async function fetchPage(
         method: "GET",
         redirect: "manual",
         headers: {
-          "Accept": "text/html, text/plain;q=0.9",
-          "User-Agent": "Desk-IX/0.1 (+personal agent)",
+          "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
         },
         signal: controller.signal,
       });
@@ -47,10 +48,22 @@ export async function fetchPage(
       if (contentType !== "text/html" && contentType !== "text/plain" && contentType !== "application/xhtml+xml") {
         throw new UrlFetchError(`Unsupported content type: ${contentType || "unknown"}`);
       }
-      const declared = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
-      if (Number.isFinite(declared) && declared > options.maxBytes) throw new UrlFetchError("Page exceeds configured size limit");
-      const { text, truncated } = await readLimitedText(response.body, options.maxBytes);
-      return { url: current.toString(), contentType, body: text, truncated };
+      if (contentType === "text/plain") {
+        const { text, truncated } = await readLimitedText(response.body, options.maxTextBytes);
+        return {
+          url: current.toString(),
+          contentType,
+          title: null,
+          description: null,
+          canonicalUrl: null,
+          source: current.hostname,
+          text,
+          images: [],
+          truncated,
+        };
+      }
+      const extracted = await extractPageMetadataFromResponse(response, current.toString(), options.maxTextBytes);
+      return { url: current.toString(), contentType, ...extracted };
     } finally {
       clearTimeout(timeout);
     }
@@ -87,7 +100,8 @@ async function readLimitedText(body: ReadableStream<Uint8Array> | null, maxBytes
     combined.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return { text: new TextDecoder().decode(combined), truncated };
+  const decoded = new TextDecoder().decode(combined);
+  return { text: truncated ? decoded.replace(/\uFFFD$/, "") : decoded, truncated };
 }
 
 export class UrlFetchError extends Error {
