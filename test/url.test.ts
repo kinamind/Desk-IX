@@ -41,9 +41,11 @@ describe("URL safety and extraction", () => {
 
   it("validates redirects and truncates oversized streams", async () => {
     const calls: string[] = [];
-    const fetcher: typeof fetch = async (input) => {
+    const requestHeaders: Headers[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       calls.push(url);
+      requestHeaders.push(new Headers(init?.headers));
       if (url === "https://example.com/start") {
         return new Response(null, { status: 302, headers: { location: "/final" } });
       }
@@ -56,6 +58,26 @@ describe("URL safety and extraction", () => {
       truncated: true,
     });
     expect(calls).toEqual(["https://example.com/start", "https://example.com/final"]);
+    expect(requestHeaders[0]?.get("user-agent")).toContain("Mozilla/5.0");
+    expect(requestHeaders[0]?.get("accept-language")).toContain("zh-CN");
+  });
+
+  it("can reach article content after a large script and style preamble", async () => {
+    const preamble = `<style>${"x".repeat(540_000)}</style>`;
+    const article = "公开文章正文：这是需要交给 Agent 理解和整理的内容。";
+    const fetcher: typeof fetch = async () => new Response(
+      `<html><head><meta property="og:title" content="公众号文章"></head><body>${preamble}<article id="js_content">${article}</article></body></html>`,
+      { headers: { "content-type": "text/html" } },
+    );
+
+    const reading = await readWebPage("https://mp.weixin.qq.com/s/public-article", {
+      urlFetchTimeoutMs: 1_000,
+      urlMaxBytes: 4_194_304,
+    }, fetcher);
+
+    expect(reading).toMatchObject({ title: "公众号文章", truncated: false });
+    expect(reading.text).toContain(article);
+    expect(reading.text).not.toContain("xxxxx");
   });
 
   it("blocks redirects to private destinations", async () => {

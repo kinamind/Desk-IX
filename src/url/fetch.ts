@@ -29,8 +29,9 @@ export async function fetchPage(
         method: "GET",
         redirect: "manual",
         headers: {
-          "Accept": "text/html, text/plain;q=0.9",
-          "User-Agent": "Desk-IX/0.1 (+personal agent)",
+          "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
         },
         signal: controller.signal,
       });
