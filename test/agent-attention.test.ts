@@ -67,6 +67,14 @@ describe("attention-aware foreground presentation", () => {
     expect(messages[0]?.content).toContain("不要用固定条数");
     expect(messages[0]?.content).toContain("只说变化量");
     expect(messages[0]?.content).toContain("联系方式");
+    expect(messages[0]?.content).toContain("延后不等于值得展示");
+    expect(messages[0]?.content).toContain("不要在用户已经过载时集中抛给用户确认");
+    expect(messages[0]?.content).toContain("不要再用另一段换句话重复");
+    expect(messages[0]?.content).toContain("planningDensity");
+    expect(messages[0]?.content).toContain("总揽是可下钻的索引");
+    expect(messages[0]?.content).toContain("不要在一个主线下面继续套子项目符号");
+    expect(messages[0]?.content).toContain("直接交付内容，不解释自己的筛选");
+    expect(messages[0]?.content).toContain("防御性、辩解式");
     expect(messages[1]?.content).toContain("事情有点多");
     expect(messages[1]?.content).toContain("TechJam");
     expect(messages[1]?.content).toContain("planningDensity");
