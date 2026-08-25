@@ -35,6 +35,8 @@ describe("empty agent response finalization", () => {
 
     const requestBody = requestBodies[0]!;
     const messages = requestBody.messages as Array<{ role: string; content: string }>;
+    expect(messages[0]?.content).toContain("后台回合恢复器");
+    expect(messages[0]?.content).toContain("前台注意力层");
     expect(messages.at(-1)?.content).toContain("work_session_manage");
     expect(requestBody).not.toHaveProperty("tools");
     expect(requestBody).not.toHaveProperty("max_tokens");

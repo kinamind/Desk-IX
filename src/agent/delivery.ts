@@ -14,6 +14,7 @@ interface DeliveryRow extends Record<string, SqlStorageValue> {
   response_text: string | null;
   delivery_status: "waiting" | "sending" | "sent" | "failed";
   attempts: number;
+  created_at: string;
 }
 
 export function migrateAgentDelivery(sql: SqlStorage): void {
@@ -52,6 +53,21 @@ export function rememberTurnOrigin(sql: SqlStorage, requestId: string, principal
     now,
     now,
   );
+}
+
+export function getTurnOriginPrincipal(sql: SqlStorage, requestId: string): AgentPrincipal | null {
+  const row = sql.exec<DeliveryRow>(
+    "SELECT * FROM composa_turn_origins WHERE request_id = ? LIMIT 1",
+    requestId,
+  ).toArray()[0];
+  if (!row || (row.channel !== "telegram" && row.channel !== "qq")) return null;
+  return {
+    channel: row.channel,
+    userId: row.user_id,
+    eventId: row.event_id,
+    receivedAt: row.created_at,
+    ...(row.reply_to_message_id ? { replyToMessageId: row.reply_to_message_id } : {}),
+  };
 }
 
 export function messageText(message: UIMessage): string {

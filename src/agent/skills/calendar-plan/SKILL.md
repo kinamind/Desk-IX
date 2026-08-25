@@ -27,4 +27,4 @@ allowed-tools: calendar_snapshot availability_find profile_get memory_search ite
 
 对模糊时段，你选择的具体时间属于 `agent_selected`。用户亲自给出具体钟点才属于 `user_exact`；只有用户知情接受明确冲突时才使用 `allowConflict`。
 
-写入后说明实际保存的工作段、提醒和关键取舍，并自然告诉用户可以修改。建议但未执行的内容要明确标成建议。
+写入后准确交接本轮实际保存的工作段、提醒、关键取舍和可修改之处。不要顺带复述与本轮计划无关的旧任务；建议但未执行的内容要明确标成建议，最终展示范围由前台注意力层结合用户当下意图决定。
