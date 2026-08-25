@@ -14,7 +14,7 @@ export function testConfig(): RuntimeConfig {
     aiDailyPlanTimeoutMs: 90_000,
     aiDailyRequestLimit: 100,
     urlFetchTimeoutMs: 1_000,
-    urlMaxBytes: 524_288,
+    urlMaxTextBytes: 524_288,
     mediaMaxBytes: 20_000_000,
     xhsMaxBytes: 2_000_000,
     telegramAllowedUserIds: new Set(["42"]),

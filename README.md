@@ -32,7 +32,7 @@ Desk-IX 是一个长期待在聊天工具里的轻量个人 Agent：每个用户
 - `完成`、`舍弃`、`稍后`、`改期`、`详情` 交互按钮；舍弃只归档，可随时恢复
 - OpenAI-compatible API，可关闭、可限额、没有未经配置的付费 fallback
 - Webhook 验证、用户 allowlist、事件去重、有限重试和结构化脱敏日志
-- 内置基础网页阅读工具：发现普通 URL 后有界抓取正文、标题和来源；登录/验证页面诚实降级
+- 内置基础网页阅读工具：发现普通 URL 后流式丢弃脚本/样式并提取正文、标题和来源；登录/验证页面诚实降级
 - 按需小红书整理技能：读取用户明确分享的帖子，可使用部署端配置的账号会话，并把可信配图作为多模态输入交给同一 AI 模型；相邻卡片后的“整理这个”会继续处理原记录，不要求重发
 - QQ 分享卡片同时读取预览、隐藏字段与附件，能取得正常 URL 时继续读取原网页
 - 含链接的消息由模型按真实指令选择是否读取；无需为论文、招聘、活动等内容分别编写业务分支
@@ -107,7 +107,7 @@ curl http://127.0.0.1:8787/health
 | `AI_DAILY_PLAN_TIMEOUT_MS` | `180000` | 每日安排等后台 AI 网络请求失效保护 |
 | `AI_DAILY_REQUEST_LIMIT` | `0` | 可选日请求预算；`0` 表示不限制 |
 | `URL_FETCH_TIMEOUT_MS` | `6000` | 网页获取超时 |
-| `URL_MAX_BYTES` | `4194304` | 网页传输安全边界；正文不会再额外裁短 |
+| `URL_MAX_TEXT_BYTES` | `524288` | 提取后可见正文的安全边界；脚本、样式和 HTML 标记不占用 |
 | `XHS_MAX_BYTES` | `2000000` | 小红书 SSR 页面最大读取字节数 |
 | `TELEGRAM_ALLOWED_USER_IDS` | 空 | 逗号分隔 Telegram user ID allowlist |
 | `QQ_ALLOWED_USER_OPENIDS` | 空 | 逗号分隔 QQ `user_openid` allowlist |
@@ -161,7 +161,7 @@ src/
   db/             参数化 D1 repositories
   http/           Worker 路由与有限 body reader
   security/       token 比较与 SSRF 防护
-  url/            基础网页阅读工具：URL 发现、有界获取、正文与 metadata 抽取
+  url/            基础网页阅读工具：URL 发现、流式正文与 metadata 抽取
   xiaohongshu/    小红书专用安全抓取、登录态页面解析与明确降级
   workflows/      durable reminder workflow
 migrations/       版本化 D1 schema

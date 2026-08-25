@@ -191,7 +191,7 @@ function agentModelEnv(): Env {
     AI_DAILY_REQUEST_LIMIT: "100",
     AI_API_KEY: "test-key",
     URL_FETCH_TIMEOUT_MS: "6000",
-    URL_MAX_BYTES: "524288",
+    URL_MAX_TEXT_BYTES: "524288",
     QQ_API_BASE_URL: "https://api.bot.qq.com",
   } as unknown as Env;
 }

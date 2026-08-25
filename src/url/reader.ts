@@ -1,5 +1,4 @@
 import type { RuntimeConfig } from "../config";
-import { extractPageMetadata, type PageMetadata } from "./extract";
 import { fetchPage } from "./fetch";
 
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
@@ -39,27 +38,29 @@ export function discoverUrls(text: string, limit = Number.POSITIVE_INFINITY): st
 
 export async function readWebPage(
   rawUrl: string,
-  config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxBytes">,
+  config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxTextBytes">,
   fetcher: typeof fetch = fetch,
 ): Promise<WebPageReading> {
-  const page = await fetchPage(rawUrl, { timeoutMs: config.urlFetchTimeoutMs, maxBytes: config.urlMaxBytes }, fetcher);
-  const metadata: PageMetadata = extractPageMetadata(page.body, page.url);
+  const page = await fetchPage(rawUrl, {
+    timeoutMs: config.urlFetchTimeoutMs,
+    maxTextBytes: config.urlMaxTextBytes,
+  }, fetcher);
   return {
     requestedUrl: rawUrl,
     finalUrl: page.url,
-    title: metadata.title,
-    description: metadata.description,
-    canonicalUrl: metadata.canonicalUrl,
-    source: metadata.source,
-    text: metadata.text,
-    images: metadata.images,
+    title: page.title,
+    description: page.description,
+    canonicalUrl: page.canonicalUrl,
+    source: page.source,
+    text: page.text,
+    images: page.images,
     truncated: page.truncated,
   };
 }
 
 export async function readWebPagesFromText(
   text: string,
-  config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxBytes">,
+  config: Pick<RuntimeConfig, "urlFetchTimeoutMs" | "urlMaxTextBytes">,
   fetcher: typeof fetch = fetch,
   limit = Number.POSITIVE_INFINITY,
 ): Promise<WebPageBatch> {
