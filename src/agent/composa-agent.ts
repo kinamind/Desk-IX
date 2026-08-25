@@ -451,8 +451,8 @@ export class ComposaAgent extends Think<Env> {
       sessionReady: Boolean(this.session),
       mcpTools: this.includeMcpTools,
       workspaceBash: this.workspaceBash !== false,
-      presentation: "attention-model",
-      presentationFallback: "backstage-draft",
+      presentation: "attention-director-renderer",
+      presentationFallback: "brief-then-backstage",
       presentationOrdering: "barrier-before-next-turn",
       skills: [...CALENDAR_SKILL_NAMES, ...XIAOHONGSHU_SKILL_NAMES],
     };

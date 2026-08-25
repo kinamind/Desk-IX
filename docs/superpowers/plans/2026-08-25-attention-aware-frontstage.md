@@ -4,7 +4,7 @@
 
 **Goal:** Make Desk-IX carry a complete background model of the user's commitments while presenting only the information that deserves the user's attention for the current intent.
 
-**Architecture:** Keep the Think Agent as the backstage cognition and execution loop. Add an always-on, tool-free attention presenter after a completed Think turn and before channel delivery. The presenter receives the original request plus the completed backstage draft, infers the foreground intent semantically, and produces the minimum sufficient response without changing facts or claiming new actions. Prompt and calendar-skill guidance will reinforce that background completeness never implies foreground enumeration.
+**Architecture:** Keep the Think Agent as the backstage cognition and execution loop. Add an always-on, tool-free attention director after a completed Think turn and before channel delivery. The director receives the original request plus the completed backstage draft and selects a structured attention brief semantically. A separate renderer sees only that brief and communication preferences, then produces the visible response without access to omitted background. Prompt and calendar-skill guidance will reinforce that background completeness never implies foreground enumeration.
 
 **Tech Stack:** TypeScript, Cloudflare Think/Agents, OpenAI-compatible chat completions, Workers Vitest, D1 usage accounting.
 
@@ -24,9 +24,9 @@ Cover the tool-free model request, preservation of the original user request and
 
 Run: `npx vitest run test/agent-attention.test.ts`
 
-**Step 3: Implement the presenter**
+**Step 3: Implement the director and renderer**
 
-Create a dedicated system prompt and provider call. Treat the backstage draft as untrusted content, forbid new actions or invented facts, and leave output length to semantic relevance rather than a numeric cap.
+Create dedicated system prompts and provider calls. Treat the backstage draft as untrusted content, forbid new actions or invented facts, and leave output length to semantic relevance rather than a numeric cap. Put an information boundary between the stages: the renderer receives only the selected brief and cannot recover omitted background.
 
 **Step 4: Run the focused test to verify it passes**
 
@@ -42,11 +42,11 @@ Run: `npx vitest run test/agent-attention.test.ts`
 
 **Step 1: Extend runtime assertions**
 
-Assert that the runtime reports an independent attention presentation layer and that empty-response recovery remains tool-free.
+Assert that the runtime reports independent attention direction and rendering, and that empty-response recovery remains tool-free.
 
 **Step 2: Integrate after Think completion**
 
-For successful turns, recover a backstage draft if needed, then run the attention presenter before delivery. If presentation fails, log it and deliver the accurate backstage draft so completed work is never lost. Error and aborted responses remain deterministic and are not rewritten.
+For successful turns, recover a backstage draft if needed, then run the attention director and renderer before delivery. If rendering fails, deterministically render the selected brief; if direction fails, log it and deliver the accurate backstage draft so completed work is never lost. Error and aborted responses remain deterministic and are not rewritten.
 
 **Step 3: Add privacy-safe observability**
 
@@ -83,7 +83,7 @@ Assert that the prompts require complete background cognition, foreground intent
 
 **Step 1: Update the turn sequence**
 
-Document the backstage Think loop, the foreground presenter, fallback behavior, privacy boundary, and one-extra-model-call cost/latency tradeoff.
+Document the backstage Think loop, the foreground director/renderer boundary, fallback behavior, privacy boundary, and two-extra-model-call cost/latency tradeoff.
 
 **Step 2: Run full validation**
 

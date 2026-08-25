@@ -29,8 +29,8 @@ describe("ComposaAgent runtime", () => {
       sessionReady: true,
       mcpTools: false,
       workspaceBash: false,
-      presentation: "attention-model",
-      presentationFallback: "backstage-draft",
+      presentation: "attention-director-renderer",
+      presentationFallback: "brief-then-backstage",
       presentationOrdering: "barrier-before-next-turn",
       skills: ["calendar-read", "calendar-plan", "calendar-manage", "calendar-review", "xiaohongshu-organize"],
     });
