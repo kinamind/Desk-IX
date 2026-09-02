@@ -158,6 +158,37 @@ describe("agent read capabilities", () => {
     expect(result.items[0]?.id).toBe(old.id);
   });
 
+  it("recalls an older Chinese item when the user paraphrases it", async () => {
+    const existing = await createItem(env.DB, {
+      type: "task",
+      title: "给由雪伟发送更新后的简历（待处理）",
+      content: "更新简历，补充实习经历部分，然后尽早发送给由雪伟。",
+      rawMessage: "简历更新后发给由雪伟",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "older-resume-target",
+    }, new Date("2026-08-24T04:43:56.401Z"));
+    for (let index = 0; index < 35; index += 1) {
+      await createItem(env.DB, {
+        type: "resource",
+        title: `近期招聘记录 ${index}`,
+        content: "岗位信息已经整理，之后再看。",
+        rawMessage: "招聘分享卡片",
+        sourceChannel: "qq",
+        sourceUserId: principal.userId,
+        sourceMessageId: `newer-recruitment-${index}`,
+      }, new Date(`2026-09-01T${String(index % 24).padStart(2, "0")}:00:00.000Z`));
+    }
+
+    const result = await memorySearch(env, principal, "等会要给由雪伟发简历", 8);
+
+    expect(result).toMatchObject({
+      matchMode: "fuzzy",
+      requiresConversationContext: true,
+    });
+    expect(result.items[0]?.id).toBe(existing.id);
+  });
+
   it("reads every explicitly supplied link instead of stopping at three", async () => {
     const urls = [1, 2, 3, 4].map((index) => `https://example.com/page-${index}`);
     const fetcher: typeof fetch = async (input) => {

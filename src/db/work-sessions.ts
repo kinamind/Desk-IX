@@ -18,6 +18,11 @@ export interface WorkSessionInput {
   label?: string;
 }
 
+export interface WorkSessionPlanInput {
+  itemId: string;
+  sessions: WorkSessionInput[];
+}
+
 function mapWorkSession(row: WorkSessionRow): WorkSession {
   return {
     id: row.id,
@@ -39,20 +44,33 @@ export async function replaceWorkSessions(
   rationale: string,
   now = new Date(),
 ): Promise<WorkSession[]> {
+  return replaceWorkSessionPlans(db, [{ itemId, sessions }], rationale, now);
+}
+
+export async function replaceWorkSessionPlans(
+  db: D1Database,
+  plans: WorkSessionPlanInput[],
+  rationale: string,
+  now = new Date(),
+): Promise<WorkSession[]> {
+  if (plans.length === 0) return [];
   const timestamp = now.toISOString();
-  const ids = sessions.map(() => crypto.randomUUID());
-  const statements = [
-    db.prepare(`
+  const insertions = plans.flatMap((plan) => plan.sessions.map((session) => ({
+    id: crypto.randomUUID(),
+    itemId: plan.itemId,
+    session,
+  })));
+  const statements = plans.map((plan) => db.prepare(`
       UPDATE work_sessions
       SET status = 'canceled', updated_at = ?
       WHERE item_id = ? AND status = 'planned'
-    `).bind(timestamp, itemId),
-    ...sessions.map((session, index) => db.prepare(`
+    `).bind(timestamp, plan.itemId));
+  statements.push(...insertions.map(({ id, itemId, session }) => db.prepare(`
       INSERT INTO work_sessions (
         id, item_id, start_at, end_at, label, rationale, status, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?)
     `).bind(
-      ids[index],
+      id,
       itemId,
       session.startAt,
       session.endAt,
@@ -60,10 +78,9 @@ export async function replaceWorkSessions(
       rationale,
       timestamp,
       timestamp,
-    )),
-  ];
+    )));
   await db.batch(statements);
-  return listWorkSessionsByIds(db, ids);
+  return listWorkSessionsByIds(db, insertions.map((insertion) => insertion.id));
 }
 
 export async function listOwnedWorkSessions(

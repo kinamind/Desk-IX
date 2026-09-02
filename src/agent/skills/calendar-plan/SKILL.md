@@ -2,7 +2,7 @@
 name: calendar-plan
 description: 为任务和目标制定可执行的内部日程。用户要求安排今天或本周、把一项工作放到下午或晚上、在截止前拆分完成、寻找合适时间、调整工作量，或希望 Desk-IX 自主规划时间时，都应激活此技能。
 compatibility: Desk-IX internal calendar tools and actions
-allowed-tools: calendar_snapshot availability_find profile_get memory_search item_get item_create item_update reminder_manage work_session_manage lifecycle_followup_manage
+allowed-tools: calendar_snapshot availability_find profile_get memory_search item_get item_create item_update reminder_manage work_session_manage calendar_replan lifecycle_followup_manage
 ---
 
 # 规划内部日程
@@ -25,6 +25,10 @@ allowed-tools: calendar_snapshot availability_find profile_get memory_search ite
 
 由任务本身、剩余时间、认知负荷、用户作息和空档共同决定是否拆分、拆成几段、每段多长。不要使用固定钟点、固定番茄钟、固定晚间模板或按事项类别套时长。若预计工作量明显无法在截止前放入，明确指出取舍或风险，不要假装计划可行。
 
-对模糊时段，你选择的具体时间属于 `agent_selected`。用户亲自给出具体钟点才属于 `user_exact`；只有用户知情接受明确冲突时才使用 `allowConflict`。
+提醒通常应避开明显不合适的打扰点，但这只是判断依据，不是硬禁令。提醒可以用于正在进行的活动结束前后的注意力切换，也可以在紧急程度足够高时打断一段可移动工作。若用户用“等会、会后、尽早”等表达而事件结束时间未知，结合当前时间、真实日程、最近上下文和用户偏好判断：精度会实质改变结果时简短询问，否则自主选择合理的近期检查点并说明假设；不能因为全天旧计划已排满就把“等会”拖到日末。
+
+用户新说明的现实状态与优先级高于先前的可移动工作段。发现用户正在做的事已使旧计划失实时，重新评估受影响时段；固定事件和截止是约束，工作段是可以调整的计划。
+
+多个事项需要互换、顺延或一起移动时，用 `calendar_replan` 提交一份完整的新局部计划；不要逐项写入并被尚未移动的旧工作段卡住。
 
 写入后准确交接本轮实际保存的工作段、提醒、关键取舍和可修改之处。不要顺带复述与本轮计划无关的旧任务；建议但未执行的内容要明确标成建议，最终展示范围由前台注意力层结合用户当下意图决定。

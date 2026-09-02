@@ -6,6 +6,7 @@ import { parseTurnPrincipal, stampTurnPrincipal, type AgentPrincipal } from "../
 import { DESK_IX_PERSONA } from "../src/agent/prompt";
 import { forgetContextSchema, rememberContextSchema } from "../src/agent/tools/context-memory";
 import {
+  calendarReplanInputSchema,
   lifecycleFollowupInputSchema,
   profileUpdateSchema,
   reminderInputSchema,
@@ -54,7 +55,8 @@ describe("ComposaAgent runtime", () => {
   it("exposes an OpenAI-compatible object schema for reminder management", () => {
     const reminderSchema = z.toJSONSchema(reminderInputSchema);
     expect(reminderSchema.type).toBe("object");
-    expect(reminderSchema.properties?.timeSelection).toMatchObject({ enum: ["agent_selected", "user_exact"] });
+    expect(reminderSchema.properties).not.toHaveProperty("timeSelection");
+    expect(reminderSchema.properties).not.toHaveProperty("allowConflict");
     expect(z.toJSONSchema(lifecycleFollowupInputSchema)).toMatchObject({ type: "object" });
   });
 
@@ -74,6 +76,10 @@ describe("ComposaAgent runtime", () => {
       })),
       rationale: "数量由任务与日程决定",
     }).success).toBe(true);
+    const workSessionSchema = z.toJSONSchema(workSessionInputSchema);
+    expect(workSessionSchema.properties).not.toHaveProperty("timeSelection");
+    expect(workSessionSchema.properties).not.toHaveProperty("allowConflict");
+    expect(z.toJSONSchema(calendarReplanInputSchema)).toMatchObject({ type: "object" });
   });
 
   it("has a stable Desk-IX persona and object-shaped profile action", () => {
