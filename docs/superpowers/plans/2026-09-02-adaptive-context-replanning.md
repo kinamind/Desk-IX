@@ -204,25 +204,25 @@ Expected: dry deployment succeeds and startup stays within the platform limit.
 **Files:**
 - No additional source files unless deployment exposes a verified issue.
 
-- [ ] **Step 1: Commit the tested change**
+- [x] **Step 1: Commit the tested change**
 
 Run: `git add src test docs && git commit -m "feat: make context and replanning adaptive"`
 
 Expected: one focused commit on `codex/adaptive-context-replanning`.
 
-- [ ] **Step 2: Deploy the branch build**
+- [x] **Step 2: Deploy the branch build**
 
 Run: `npm run deploy`
 
 Expected: Worker deploy succeeds with unchanged bindings and migrations.
 
-- [ ] **Step 3: Verify health without replaying the user's message**
+- [x] **Step 3: Verify health without replaying the user's message**
 
 Run: `curl -sS -o /dev/null -w '%{http_code}' https://desk.kinamind.org/health`
 
 Expected: `200`.
 
-- [ ] **Step 4: Push and open a pull request**
+- [x] **Step 4: Push and open a pull request**
 
 Push the branch, create a PR describing the three observed failures and the generic repair, wait for CI, and leave merge gated on the user's live conversational verification.
 
