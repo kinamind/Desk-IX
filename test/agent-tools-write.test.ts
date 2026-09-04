@@ -5,12 +5,13 @@ import type { ReminderWorkflowPayload } from "../src/core/types";
 import {
   manageOwnedReminder,
   manageOwnedWorkSessions,
+  replanOwnedWorkSessions,
   transitionOwnedItem,
   updateOwnedItem,
   updateOwnedProfile,
 } from "../src/agent/tools/write";
 import { createItem, getItem } from "../src/db/items";
-import { listOwnedWorkSessions } from "../src/db/work-sessions";
+import { listOwnedWorkSessions, replaceWorkSessions } from "../src/db/work-sessions";
 import { ensureUserProfile, getUserProfile } from "../src/db/user-profiles";
 
 const principal: AgentPrincipal = {
@@ -143,57 +144,68 @@ describe("agent write capabilities", () => {
       itemId: item.id,
       remindAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       kind: "deferred_action",
-      allowConflict: false,
-      timeSelection: "agent_selected",
     });
     expect(immediate.scheduled).toBe(true);
 
-    const conflict = await manageOwnedReminder(env, principal, {
+    const conflict = await manageOwnedReminder(reminderEnv, principal, {
       operation: "set",
       itemId: item.id,
       remindAt: new Date(base).toISOString(),
       kind: "deferred_action",
-      allowConflict: false,
-      timeSelection: "agent_selected",
     });
-    expect(conflict.scheduled).toBe(false);
-    expect("reason" in conflict ? conflict.reason : "").toContain("overlaps");
-    expect("conflicts" in conflict ? conflict.conflicts[0]?.title : "").toBe("已有会议");
+    expect(conflict.scheduled).toBe(true);
+    expect("scheduleConflicts" in conflict ? conflict.scheduleConflicts[0]?.title : "").toBe("已有会议");
   });
 
-  it("does not let an agent-selected broad time override a collision", async () => {
+  it("returns a retryable time anchor instead of terminating a turn on a past reminder", async () => {
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "告诉同事可以运行了",
+      content: "明天中午告诉同事可以运行了",
+      rawMessage: "明天中午告诉同事可以运行了",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "past-reminder-retry",
+    });
+
+    await expect(manageOwnedReminder(env, principal, {
+      operation: "set",
+      itemId: item.id,
+      remindAt: "2026-08-15T04:00:00.000Z",
+      kind: "deferred_action",
+    })).resolves.toMatchObject({
+      scheduled: false,
+      retryable: true,
+      reasonCode: "past_time",
+      turnReceivedAt: principal.receivedAt,
+    });
+  });
+
+  it("allows a reminder to serve as a transition cue during a flexible work plan", async () => {
     const base = Date.now() + 48 * 60 * 60_000;
     const item = await createItem(env.DB, {
       type: "task",
-      title: "下午处理材料",
-      content: "下午提醒，具体时间由 Desk-IX 选择",
-      rawMessage: "下午提醒我",
+      title: "会后处理材料",
+      content: "当前活动结束后提醒切换",
+      rawMessage: "等会提醒我",
       sourceChannel: "qq",
       sourceUserId: principal.userId,
       sourceMessageId: "broad-time-target",
     });
-    await createItem(env.DB, {
+    const flexible = await createItem(env.DB, {
       type: "task",
-      title: "下午已有安排",
-      content: "占用这一小时",
-      rawMessage: "已有安排",
+      title: "原来的论文工作",
+      content: "这是可调整的工作计划",
+      rawMessage: "原工作计划",
       sourceChannel: "qq",
       sourceUserId: principal.userId,
       sourceMessageId: "broad-time-conflict",
-      dueAt: new Date(base).toISOString(),
-      estimatedDuration: 60,
     });
-
-    const broad = await manageOwnedReminder(env, principal, {
-      operation: "set",
-      itemId: item.id,
-      remindAt: new Date(base).toISOString(),
-      kind: "deferred_action",
-      allowConflict: true,
-      timeSelection: "agent_selected",
-    });
-    expect(broad.scheduled).toBe(false);
-    expect("reason" in broad ? broad.reason : "").toContain("broad or agent-selected");
+    await replaceWorkSessions(env.DB, flexible.id, [{
+      startAt: new Date(base).toISOString(),
+      endAt: new Date(base + 60 * 60_000).toISOString(),
+      label: "论文工作",
+    }], "原计划");
 
     const reminderEnv: Env = {
       ...env,
@@ -203,16 +215,17 @@ describe("agent write capabilities", () => {
         }) as WorkflowInstance,
       } as Workflow<ReminderWorkflowPayload>,
     };
-    const exact = await manageOwnedReminder(reminderEnv, principal, {
+    const result = await manageOwnedReminder(reminderEnv, principal, {
       operation: "set",
       itemId: item.id,
       remindAt: new Date(base).toISOString(),
-      kind: "deferred_action",
-      allowConflict: true,
-      timeSelection: "user_exact",
+      kind: "switch_attention_after_current_activity",
     });
-    expect(exact.scheduled).toBe(true);
-    expect("conflictsAccepted" in exact ? exact.conflictsAccepted : 0).toBeGreaterThan(0);
+
+    expect(result.scheduled).toBe(true);
+    expect("scheduleConflicts" in result ? result.scheduleConflicts : []).toEqual([
+      expect.objectContaining({ itemId: flexible.id, source: "work_session" }),
+    ]);
   });
 
   it("does not invent a pre-meeting conflict window for a reminder", async () => {
@@ -251,8 +264,6 @@ describe("agent write capabilities", () => {
       itemId: target.id,
       remindAt: new Date(meetingAt - 5 * 60_000).toISOString(),
       kind: "bring_materials",
-      allowConflict: false,
-      timeSelection: "agent_selected",
     })).resolves.toMatchObject({ scheduled: true });
   });
 
@@ -286,8 +297,6 @@ describe("agent write capabilities", () => {
       itemId: first.id,
       sessions: [{ startAt: firstStart, endAt: firstEnd, label: "整理现状" }],
       rationale: "先完成较早截止的 update",
-      timeSelection: "agent_selected",
-      allowConflict: false,
     })).resolves.toMatchObject({ scheduled: true, sessionCount: 1, totalMinutes: 120 });
 
     const overlapping = await manageOwnedWorkSessions(env, principal, {
@@ -295,8 +304,6 @@ describe("agent write capabilities", () => {
       itemId: second.id,
       sessions: [{ startAt: firstStart, endAt: firstEnd }],
       rationale: "proposal 第一段",
-      timeSelection: "agent_selected",
-      allowConflict: false,
     });
     expect(overlapping).toMatchObject({ scheduled: false });
     expect("conflicts" in overlapping ? overlapping.conflicts[0]?.source : "").toBe("work_session");
@@ -306,8 +313,6 @@ describe("agent write capabilities", () => {
       itemId: second.id,
       sessions: [{ startAt: laterStart, endAt: laterEnd, label: "proposal 框架" }],
       rationale: "避开已有工作段",
-      timeSelection: "agent_selected",
-      allowConflict: false,
     })).resolves.toMatchObject({ scheduled: true, sessionCount: 1 });
 
     await expect(listOwnedWorkSessions(env.DB, second.id, "qq", principal.userId)).resolves.toMatchObject([
@@ -338,8 +343,6 @@ describe("agent write capabilities", () => {
         { startAt: middle, endAt: end },
       ],
       rationale: "错误重叠方案",
-      timeSelection: "agent_selected",
-      allowConflict: false,
     });
     expect(overlappingPlan).toMatchObject({ scheduled: false });
     expect("reason" in overlappingPlan ? overlappingPlan.reason : "").toContain("overlap");
@@ -349,8 +352,6 @@ describe("agent write capabilities", () => {
       itemId: item.id,
       sessions: [{ startAt: start, endAt: middle }],
       rationale: "可执行的一段",
-      timeSelection: "agent_selected",
-      allowConflict: false,
     });
     await transitionOwnedItem(env, principal, { itemId: item.id, transition: "complete" });
     await expect(listOwnedWorkSessions(env.DB, item.id, "qq", principal.userId)).resolves.toMatchObject([
@@ -374,8 +375,154 @@ describe("agent write capabilities", () => {
       itemId: item.id,
       sessions: [{ startAt: new Date(start).toISOString(), endAt: new Date(start + 60 * 60_000).toISOString() }],
       rationale: "不应成功",
-      timeSelection: "agent_selected",
-      allowConflict: false,
+    })).rejects.toThrow("not found");
+  });
+
+  it("atomically replans several flexible items when current priorities change", async () => {
+    const base = Date.now() + 7 * 24 * 60 * 60_000;
+    const oldPriority = await createItem(env.DB, {
+      type: "task",
+      title: "原来的论文工作",
+      content: "原先排在前面，但现在可以移动",
+      rawMessage: "原计划",
+      sourceChannel: principal.channel,
+      sourceUserId: principal.userId,
+      sourceMessageId: "adaptive-old-priority",
+    });
+    const newPriority = await createItem(env.DB, {
+      type: "task",
+      title: "临时提升优先级的工作",
+      content: "当前活动结束后优先处理",
+      rawMessage: "会后优先处理这个",
+      sourceChannel: principal.channel,
+      sourceUserId: principal.userId,
+      sourceMessageId: "adaptive-new-priority",
+    });
+    const fixedMeeting = await createItem(env.DB, {
+      type: "task",
+      title: "不可移动的会议",
+      content: "固定事件保持原位",
+      rawMessage: "固定会议",
+      dueAt: new Date(base + 2 * 60 * 60_000).toISOString(),
+      estimatedDuration: 60,
+      temporalRole: "event",
+      sourceChannel: principal.channel,
+      sourceUserId: principal.userId,
+      sourceMessageId: "adaptive-fixed-meeting",
+    });
+    await replaceWorkSessions(env.DB, oldPriority.id, [{
+      startAt: new Date(base).toISOString(),
+      endAt: new Date(base + 2 * 60 * 60_000).toISOString(),
+      label: "原任务",
+    }], "原计划");
+    await replaceWorkSessions(env.DB, newPriority.id, [{
+      startAt: new Date(base + 3 * 60 * 60_000).toISOString(),
+      endAt: new Date(base + 4 * 60 * 60_000).toISOString(),
+      label: "原来较晚处理",
+    }], "原计划");
+
+    const result = await replanOwnedWorkSessions(env, principal, {
+      plans: [
+        {
+          itemId: newPriority.id,
+          sessions: [{
+            startAt: new Date(base).toISOString(),
+            endAt: new Date(base + 60 * 60_000).toISOString(),
+            label: "先处理新优先事项",
+          }],
+        },
+        {
+          itemId: oldPriority.id,
+          sessions: [{
+            startAt: new Date(base + 60 * 60_000).toISOString(),
+            endAt: new Date(base + 2 * 60 * 60_000).toISOString(),
+            label: "随后继续原任务",
+          }],
+        },
+      ],
+      rationale: "用户当前状态和优先级变化，局部重排可移动工作段",
+    });
+
+    expect(result).toMatchObject({ scheduled: true, planCount: 2, sessionCount: 2 });
+    const newPrioritySessions = await listOwnedWorkSessions(env.DB, newPriority.id, principal.channel, principal.userId);
+    const oldPrioritySessions = await listOwnedWorkSessions(env.DB, oldPriority.id, principal.channel, principal.userId);
+    expect(newPrioritySessions.filter((session) => session.status === "planned")).toEqual([
+      expect.objectContaining({ startAt: new Date(base).toISOString(), label: "先处理新优先事项" }),
+    ]);
+    expect(oldPrioritySessions.filter((session) => session.status === "planned")).toEqual([
+      expect.objectContaining({ startAt: new Date(base + 60 * 60_000).toISOString(), label: "随后继续原任务" }),
+    ]);
+    await expect(getItem(env.DB, fixedMeeting.id)).resolves.toMatchObject({
+      dueAt: new Date(base + 2 * 60 * 60_000).toISOString(),
+      temporalRole: "event",
+    });
+  });
+
+  it("keeps an existing plan intact when a coupled replan conflicts with a fixed event", async () => {
+    const base = Date.now() + 8 * 24 * 60 * 60_000;
+    const task = await createItem(env.DB, {
+      type: "task",
+      title: "可移动工作",
+      content: "原计划仍然有效，除非整个新方案可提交",
+      rawMessage: "可移动工作",
+      sourceChannel: principal.channel,
+      sourceUserId: principal.userId,
+      sourceMessageId: "atomic-replan-task",
+    });
+    await createItem(env.DB, {
+      type: "task",
+      title: "固定会面",
+      content: "不能由工作计划工具移动",
+      rawMessage: "固定会面",
+      dueAt: new Date(base + 60 * 60_000).toISOString(),
+      estimatedDuration: 60,
+      temporalRole: "event",
+      sourceChannel: principal.channel,
+      sourceUserId: principal.userId,
+      sourceMessageId: "atomic-replan-event",
+    });
+    const originalStart = new Date(base).toISOString();
+    const originalEnd = new Date(base + 60 * 60_000).toISOString();
+    await replaceWorkSessions(env.DB, task.id, [{ startAt: originalStart, endAt: originalEnd }], "原计划");
+
+    const result = await replanOwnedWorkSessions(env, principal, {
+      plans: [{
+        itemId: task.id,
+        sessions: [{
+          startAt: new Date(base + 90 * 60_000).toISOString(),
+          endAt: new Date(base + 150 * 60_000).toISOString(),
+        }],
+      }],
+      rationale: "尝试移动到固定会面上",
+    });
+
+    expect(result).toMatchObject({ scheduled: false });
+    await expect(listOwnedWorkSessions(env.DB, task.id, principal.channel, principal.userId)).resolves.toEqual([
+      expect.objectContaining({ startAt: originalStart, endAt: originalEnd, status: "planned" }),
+    ]);
+  });
+
+  it("does not replan another user's item", async () => {
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "其他人的安排",
+      content: "不能访问",
+      rawMessage: "其他人的安排",
+      sourceChannel: principal.channel,
+      sourceUserId: "another-user",
+      sourceMessageId: "private-calendar-replan",
+    });
+    const start = Date.now() + 9 * 24 * 60 * 60_000;
+
+    await expect(replanOwnedWorkSessions(env, principal, {
+      plans: [{
+        itemId: item.id,
+        sessions: [{
+          startAt: new Date(start).toISOString(),
+          endAt: new Date(start + 60 * 60_000).toISOString(),
+        }],
+      }],
+      rationale: "不应成功",
     })).rejects.toThrow("not found");
   });
 });

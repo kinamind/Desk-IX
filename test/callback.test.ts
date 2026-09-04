@@ -121,7 +121,7 @@ describe("callback business actions", () => {
     expect(await getItem(env.DB, item.id)).toMatchObject({ status: "open" });
   });
 
-  it("moves Later past another scheduled item", async () => {
+  it("keeps the exact Later interval even when the reminder lands during an event", async () => {
     const item = await createTask("callback-later-conflict");
     await createItem(env.DB, {
       type: "task",
@@ -139,7 +139,7 @@ describe("callback business actions", () => {
 
     const result = await handleCallback(callbackEnv, callbackMessage(item.id, "later", "1h"), now);
 
-    expect(result.output.text).toContain("已避开日程冲突");
-    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T04:00:00.000Z");
+    expect(result.output.text).not.toContain("已避开日程冲突");
+    expect(workflow.creates[0]?.params?.remindAt).toBe("2026-08-15T03:00:00.000Z");
   });
 });

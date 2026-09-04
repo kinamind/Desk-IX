@@ -3,7 +3,7 @@ import { mapItem, type ItemRow } from "./rows";
 
 export interface NaturalItemSearchResult {
   items: Item[];
-  matchMode: "lexical" | "recent_fallback";
+  matchMode: "lexical" | "fuzzy" | "recent_fallback";
 }
 
 export async function createItem(db: D1Database, input: CreateItemInput, now = new Date()): Promise<Item> {
@@ -91,26 +91,24 @@ export async function searchOwnedItemsNatural(
   query: string,
   limit = 8,
 ): Promise<NaturalItemSearchResult> {
-  const normalizedQuery = normalizeSearchText(query);
-  const terms = Array.from(new Set([
+  const lexicalTerms = Array.from(new Set([
     ...query.split(/[\s,，。；;、/]+/u),
-    normalizedQuery,
+    normalizeSearchText(query),
   ].map(normalizeSearchText).filter((term) => term.length >= 2)));
+  const signals = buildSearchSignals(query);
   const resultLimit = Math.max(Math.floor(limit), 1);
-  if (terms.length > 0) {
+  if (signals.length > 0) {
     const scoreParts: string[] = [];
     const scoreValues: string[] = [];
-    for (const term of terms) {
+    for (const signal of signals) {
       scoreParts.push(`
-        CASE WHEN instr(lower(title), lower(?)) > 0 THEN 12 ELSE 0 END
-        + CASE WHEN instr(lower(content), lower(?)) > 0 THEN 5 ELSE 0 END
-        + CASE WHEN instr(lower(raw_message), lower(?)) > 0 THEN 5 ELSE 0 END
-        + CASE WHEN instr(lower(tags), lower(?)) > 0 THEN 5 ELSE 0 END
-        + CASE WHEN instr(lower(ai_enrichment), lower(?)) > 0 THEN 5 ELSE 0 END
+        CASE WHEN instr(lower(title), ?) > 0 THEN ${signal.weight * 4} ELSE 0 END
+        + CASE WHEN instr(lower(content || char(10) || raw_message || char(10) || tags || char(10) || ai_enrichment), ?) > 0
+          THEN ${signal.weight} ELSE 0 END
       `);
-      scoreValues.push(term, term, term, term, term);
+      scoreValues.push(signal.value, signal.value);
     }
-    const lexical = await db.prepare(`
+    const matched = await db.prepare(`
       SELECT * FROM (
         SELECT items.*, (${scoreParts.join(" + ")}) AS match_score
         FROM items
@@ -120,8 +118,19 @@ export async function searchOwnedItemsNatural(
       ORDER BY match_score DESC, updated_at DESC
       LIMIT ?
     `).bind(...scoreValues, channel, userId, resultLimit).all<ItemRow & { match_score: number }>();
-    if (lexical.results.length > 0) {
-      return { items: lexical.results.map(mapItem), matchMode: "lexical" };
+    if (matched.results.length > 0) {
+      const items = matched.results.map(mapItem);
+      const hasLexicalMatch = items.some((item) => {
+        const searchable = normalizeSearchText([
+          item.title,
+          item.content,
+          item.rawMessage,
+          item.tags.join(" "),
+          JSON.stringify(item.aiEnrichment),
+        ].join("\n"));
+        return lexicalTerms.some((term) => searchable.includes(term));
+      });
+      return { items, matchMode: hasLexicalMatch ? "lexical" : "fuzzy" };
     }
   }
   const candidates = await listAgentContextItems(db, channel, userId, resultLimit);
@@ -133,6 +142,42 @@ export async function searchOwnedItemsNatural(
 
 function normalizeSearchText(value: string): string {
   return value.toLocaleLowerCase().replace(/[\p{P}\p{S}\p{Z}\p{Cc}]+/gu, "");
+}
+
+interface SearchSignal {
+  value: string;
+  weight: number;
+}
+
+function buildSearchSignals(value: string): SearchSignal[] {
+  const weighted = new Map<string, number>();
+  const add = (signal: string, weight: number): void => {
+    const normalized = normalizeSearchText(signal);
+    if (normalized.length < 2) return;
+    weighted.set(normalized, Math.max(weighted.get(normalized) ?? 0, weight));
+  };
+
+  const normalized = normalizeSearchText(value);
+  add(normalized, Math.min(24, Math.max(8, Array.from(normalized).length)));
+  for (const chunk of value.toLocaleLowerCase().match(/\p{Script=Han}+|[\p{L}\p{N}]+/gu) ?? []) {
+    const characters = Array.from(chunk);
+    if (/^\p{Script=Han}+$/u.test(chunk)) {
+      add(chunk, Math.min(16, Math.max(4, characters.length)));
+      for (let index = 0; index < characters.length - 1; index += 1) {
+        add(`${characters[index]}${characters[index + 1]}`, 2);
+      }
+    } else {
+      add(chunk, Math.min(16, Math.max(4, characters.length)));
+    }
+  }
+
+  const signals = Array.from(weighted, ([signal, weight]) => ({ value: signal, weight }));
+  if (signals.length <= 24) return signals;
+  const sampled: SearchSignal[] = [];
+  for (let index = 0; index < 24; index += 1) {
+    sampled.push(signals[Math.round(index * (signals.length - 1) / 23)]!);
+  }
+  return Array.from(new Map(sampled.map((signal) => [signal.value, signal])).values());
 }
 
 export async function listOwnedItemReminders(
@@ -147,7 +192,6 @@ export async function listOwnedItemReminders(
     WHERE r.item_id = ? AND i.source_channel = ? AND i.source_user_id = ?
       AND r.target_channel = ? AND r.target_user_id = ?
     ORDER BY r.remind_at DESC
-    LIMIT 20
   `).bind(itemId, channel, userId, channel, userId).all<{
     id: string;
     remind_at: string;

@@ -49,7 +49,8 @@ export async function memorySearch(
     query,
     count: result.items.length,
     matchMode: result.matchMode,
-    requiresConversationContext: result.matchMode === "recent_fallback",
+    requiresConversationContext: result.matchMode !== "lexical",
+    semanticConfirmationRequired: result.matchMode === "fuzzy",
     items: result.items.map((item) => ({
       id: item.id,
       type: item.type,
@@ -118,7 +119,7 @@ export async function loadOwnedProfile(env: Env, principal: AgentPrincipal) {
 export function createReadTools(env: Env, principal: PrincipalProvider): ToolSet {
   return {
     memory_search: tool({
-      description: "Search this user's saved tasks, notes, resources, ideas, and projects. Resolve 上一条/刚才那个 from the actual conversation first, and use concrete content from a [引用消息] block as a strong anchor. matchMode=lexical is a real text match. matchMode=recent_fallback only supplies context candidates and is not sufficient evidence by itself; use conversation history to disambiguate before changing anything.",
+      description: "Search this user's saved tasks, notes, resources, ideas, and projects. Resolve 上一条/刚才那个 from the actual conversation first, and use concrete content from a [引用消息] block as a strong anchor. matchMode=lexical is direct text evidence; matchMode=fuzzy recalls paraphrases and requires your semantic confirmation against the conversation; matchMode=recent_fallback only supplies context candidates and is never sufficient evidence by itself. Search results are candidates, not an instruction to update the first row.",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(2_000),
         limit: z.number().int().min(1).default(8),

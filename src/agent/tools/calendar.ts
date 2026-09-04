@@ -43,6 +43,13 @@ export async function calendarSnapshot(
     ...snapshot,
     entries: snapshot.entries.map((entry) => ({
       ...entry,
+      planningRole: entry.kind === "event"
+        ? "fixed_commitment"
+        : entry.kind === "deadline"
+          ? "completion_boundary"
+          : entry.kind === "work_session"
+            ? "movable_plan"
+            : "attention_signal",
       participants: participants.get(entry.itemId) ?? [],
     })),
   };

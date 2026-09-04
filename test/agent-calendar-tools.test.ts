@@ -59,6 +59,7 @@ describe("Agent calendar tools", () => {
     expect(result.entries.find((entry) => entry.itemId === firstMeeting.id)?.participants).toEqual([
       expect.objectContaining({ name: "Ivy", role: "participant" }),
     ]);
+    expect(result.entries.find((entry) => entry.itemId === firstMeeting.id)?.planningRole).toBe("fixed_commitment");
     expect(result.conflicts).toHaveLength(1);
   });
 

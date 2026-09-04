@@ -1,11 +1,13 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { getAgentByName } from "agents";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { parseTurnPrincipal, stampTurnPrincipal, type AgentPrincipal } from "../src/agent/context";
 import { DESK_IX_PERSONA } from "../src/agent/prompt";
+import type { ComposaAgent } from "../src/agent/composa-agent";
 import { forgetContextSchema, rememberContextSchema } from "../src/agent/tools/context-memory";
 import {
+  calendarReplanInputSchema,
   lifecycleFollowupInputSchema,
   profileUpdateSchema,
   reminderInputSchema,
@@ -36,6 +38,17 @@ describe("ComposaAgent runtime", () => {
     });
   });
 
+  it("assembles the always-on Desk-IX persona together with loadable skills", async () => {
+    const agent = await getAgentByName(env.COMPOSA_AGENT, "qq:prompt-owner");
+    const system = await runInDurableObject(agent, (instance: ComposaAgent) => (
+      instance.session.freezeSystemPrompt()
+    ));
+
+    expect(system).toContain("Desk-IX（拾序）");
+    expect(system).toContain("历史候选事实");
+    expect(system).toContain("calendar-plan");
+  });
+
   it("persists the authenticated principal in Think turn metadata", () => {
     const principal: AgentPrincipal = {
       channel: "qq",
@@ -54,7 +67,8 @@ describe("ComposaAgent runtime", () => {
   it("exposes an OpenAI-compatible object schema for reminder management", () => {
     const reminderSchema = z.toJSONSchema(reminderInputSchema);
     expect(reminderSchema.type).toBe("object");
-    expect(reminderSchema.properties?.timeSelection).toMatchObject({ enum: ["agent_selected", "user_exact"] });
+    expect(reminderSchema.properties).not.toHaveProperty("timeSelection");
+    expect(reminderSchema.properties).not.toHaveProperty("allowConflict");
     expect(z.toJSONSchema(lifecycleFollowupInputSchema)).toMatchObject({ type: "object" });
   });
 
@@ -74,6 +88,10 @@ describe("ComposaAgent runtime", () => {
       })),
       rationale: "数量由任务与日程决定",
     }).success).toBe(true);
+    const workSessionSchema = z.toJSONSchema(workSessionInputSchema);
+    expect(workSessionSchema.properties).not.toHaveProperty("timeSelection");
+    expect(workSessionSchema.properties).not.toHaveProperty("allowConflict");
+    expect(z.toJSONSchema(calendarReplanInputSchema)).toMatchObject({ type: "object" });
   });
 
   it("has a stable Desk-IX persona and object-shaped profile action", () => {
@@ -94,6 +112,9 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("完整性属于后台状态");
     expect(DESK_IX_PERSONA).toContain("独立前台注意力层");
     expect(DESK_IX_PERSONA).toContain("不要用固定条数");
+    expect(DESK_IX_PERSONA).toContain("同名人物");
+    expect(DESK_IX_PERSONA).toContain("本轮时间锚点");
+    expect(DESK_IX_PERSONA).toContain("午夜当成机械的语义分界");
     expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
     expect(z.toJSONSchema(rememberContextSchema)).toMatchObject({ type: "object" });
