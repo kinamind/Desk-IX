@@ -16,6 +16,8 @@ allowed-tools: calendar_snapshot availability_find profile_get memory_search ite
 3. 用 `calendar_snapshot` 查看足以覆盖相关截止的范围；需要某种连续时长时，再用 `availability_find` 获取全部可用区间。
 4. 同时考虑固定事件、已有工作段、提醒密度、其他截止和当前本地时间。
 
+“今天、明天、中午、下午”等相对时间以本轮消息接收时刻和用户时区为唯一锚点，不继承召回记录里的旧日期。写入前核对绝对时间与原话方向一致；若时间 action 返回 `retryable=true`，修正事项时间与提醒时间并在同一轮重试，不能把第一次换算错误当成最终结果。
+
 ## 形成计划
 
 - `deadline` 只表示最晚完成时间；真正投入用 `work_session_manage` 保存。

@@ -410,12 +410,32 @@ export async function manageOwnedReminder(
   }
 
   if (!input.remindAt) throw new Error("Reminder time is required");
+  const now = new Date();
   const remindAt = new Date(input.remindAt);
-  if (Number.isNaN(remindAt.getTime())) throw new Error("Invalid reminder time");
-  if (remindAt.getTime() <= Date.now()) throw new Error("Reminder time must be in the future");
+  if (Number.isNaN(remindAt.getTime())) {
+    return {
+      scheduled: false,
+      retryable: true,
+      reasonCode: "invalid_time",
+      reason: "The reminder timestamp is invalid. Recompute it from the turn time anchor and retry in this turn.",
+      currentUtc: now.toISOString(),
+      turnReceivedAt: principal.receivedAt,
+    };
+  }
+  if (remindAt.getTime() <= now.getTime()) {
+    return {
+      scheduled: false,
+      retryable: true,
+      reasonCode: "past_time",
+      reason: "The reminder timestamp is not in the future. Recompute the user's relative time from the turn time anchor, update any affected item time, and retry in this turn.",
+      requestedRemindAt: remindAt.toISOString(),
+      currentUtc: now.toISOString(),
+      turnReceivedAt: principal.receivedAt,
+    };
+  }
 
-  const horizonDays = Math.max(1, Math.ceil((remindAt.getTime() - Date.now()) / 86_400_000) + 1);
-  const windows = await listScheduleWindows(env.DB, principal.channel, principal.userId, new Date(), horizonDays);
+  const horizonDays = Math.max(1, Math.ceil((remindAt.getTime() - now.getTime()) / 86_400_000) + 1);
+  const windows = await listScheduleWindows(env.DB, principal.channel, principal.userId, now, horizonDays);
   const conflicts = windows.filter((window) => window.itemId !== item.id && (
     remindAt.getTime() >= new Date(window.startAt).getTime()
     && remindAt.getTime() < new Date(window.endAt).getTime()
@@ -521,7 +541,7 @@ export function createWriteActions(
       execute: (input) => transitionOwnedItem(env, principal(), input, followups),
     }),
     reminder_manage: action({
-      description: "Set, reschedule, or cancel a reminder for an existing item. A reminder is an attention signal, not occupied work. When timing depends on the user's schedule, inspect calendar_snapshot first and choose a useful point from the user's wording, current reality, priorities, and preferences. The action reports any overlapping calendar entries as advisory scheduleConflicts but does not decide whether an interruption is appropriate. You own that judgment and may reschedule again in the same turn. Code enforces only ownership and a valid future timestamp.",
+      description: "Set, reschedule, or cancel a reminder for an existing item. A reminder is an attention signal, not occupied work. Interpret relative time from the explicit turn time anchor and user timezone, never from a recalled item's date. When timing depends on the user's schedule, inspect calendar_snapshot first and choose a useful point from the user's wording, current reality, priorities, and preferences. The action reports overlapping calendar entries as advisory scheduleConflicts. If it returns scheduled=false with retryable=true because the timestamp is invalid or past, recompute the absolute time, update the item's affected time fields, and call this action again in the same turn instead of reporting the first failure. You own interruption judgment and may reschedule again in the same turn. Code enforces only ownership and a valid future timestamp.",
       inputSchema: reminderInputSchema,
       permissions: ["reminders:write"],
       idempotencyKey: ({ input }) => `reminder:${principal().eventId}:${input.itemId}:${stableFingerprint(input)}`,

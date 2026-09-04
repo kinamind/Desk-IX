@@ -45,7 +45,9 @@ describe("adaptive turn context", () => {
     );
 
     expect(context).toContain("候选证据");
-    expect(context).toContain("由模型结合真实会话确认");
+    expect(context).toContain('"provenance":"historical_candidate_only"');
+    expect(context).toContain('"identityResolved":false');
+    expect(context).toContain("同名人物或相似关键词不足以建立关联");
     expect(context).toContain(existing.id);
     expect(context).toContain(existing.title);
     expect(context).toContain('"matchMode":"fuzzy"');

@@ -2,6 +2,7 @@ import { Think } from "@cloudflare/think";
 import type {
   ChatResponseResult,
   MessageConcurrency,
+  Session,
   StepContext,
   ThinkSubmissionInspection,
   TurnConfig,
@@ -116,6 +117,13 @@ export class ComposaAgent extends Think<Env> {
     return buildSystemPrompt();
   }
 
+  override configureSession(session: Session): Session {
+    return session.withContext("desk-ix-persona", {
+      description: "Desk-IX's always-on identity, reasoning policy, and user relationship contract.",
+      provider: { get: () => Promise.resolve(buildSystemPrompt()) },
+    });
+  }
+
   override getSkills() {
     return [calendarSkillSource, xiaohongshuSkillSource];
   }
@@ -175,7 +183,7 @@ export class ComposaAgent extends Think<Env> {
       : "";
     return {
       activeTools: ACTIVE_TOOLS,
-      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now)}${memoryContext}${itemContext}${pendingContext}${lifecycleReviewContext}`,
+      instructions: `${ctx.system}\n\n本轮来自 ${principal.channel}。当前用户只允许访问和修改其自己的记忆与个人档案。\n${buildProfileContext(profile, now, new Date(principal.receivedAt))}${memoryContext}${itemContext}${pendingContext}${lifecycleReviewContext}`,
       maxSteps: this.maxSteps,
       timeout: {
         stepMs: config.aiTimeoutMs,

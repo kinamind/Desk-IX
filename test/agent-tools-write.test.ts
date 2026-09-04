@@ -157,6 +157,30 @@ describe("agent write capabilities", () => {
     expect("scheduleConflicts" in conflict ? conflict.scheduleConflicts[0]?.title : "").toBe("已有会议");
   });
 
+  it("returns a retryable time anchor instead of terminating a turn on a past reminder", async () => {
+    const item = await createItem(env.DB, {
+      type: "task",
+      title: "告诉同事可以运行了",
+      content: "明天中午告诉同事可以运行了",
+      rawMessage: "明天中午告诉同事可以运行了",
+      sourceChannel: "qq",
+      sourceUserId: principal.userId,
+      sourceMessageId: "past-reminder-retry",
+    });
+
+    await expect(manageOwnedReminder(env, principal, {
+      operation: "set",
+      itemId: item.id,
+      remindAt: "2026-08-15T04:00:00.000Z",
+      kind: "deferred_action",
+    })).resolves.toMatchObject({
+      scheduled: false,
+      retryable: true,
+      reasonCode: "past_time",
+      turnReceivedAt: principal.receivedAt,
+    });
+  });
+
   it("allows a reminder to serve as a transition cue during a flexible work plan", async () => {
     const base = Date.now() + 48 * 60 * 60_000;
     const item = await createItem(env.DB, {
