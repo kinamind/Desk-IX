@@ -114,6 +114,7 @@ describe("ComposaAgent runtime", () => {
     expect(DESK_IX_PERSONA).toContain("不要用固定条数");
     expect(DESK_IX_PERSONA).toContain("同名人物");
     expect(DESK_IX_PERSONA).toContain("本轮时间锚点");
+    expect(DESK_IX_PERSONA).toContain("午夜当成机械的语义分界");
     expect(DESK_IX_PERSONA).not.toContain("不要固定套用 14:00");
     expect(z.toJSONSchema(profileUpdateSchema)).toMatchObject({ type: "object" });
     expect(z.toJSONSchema(rememberContextSchema)).toMatchObject({ type: "object" });
